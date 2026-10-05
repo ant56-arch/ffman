@@ -95,12 +95,13 @@ class SleeperTests(unittest.TestCase):
             "1": {"pass_yd": 250, "pass_td": 2},          # 18
             "2": {"rush_yd": 90},                          # 9 but Out
             "3": {"rec": 6, "rec_yd": 80},                 # 14
-            "4": {"rec": 4, "rec_yd": 40},                 # 8 + 2 TE premium
+            "4": {"rec": 4, "rec_yd": 40, "bonus_rec_te": 4},  # 8 + 2 TE premium
             "5": {"rec": 3, "rec_yd": 30},                 # 6
             "6": {"rush_yd": 70, "rec": 2, "rec_yd": 10},  # 10
-            "KC": {"pts_ppr": 7.0},                        # fallback to pts_ppr
+            "KC": {"pts_ppr": 7.0, "gp": 1},               # fallback to pts_ppr
         }
-        t = sleeper.build_team(league, roster, players, projections, 5)
+        # Live status from the projections feed overrides the cached player file.
+        t = sleeper.build_team(league, roster, players, projections, 5, {"3": "Questionable"})
         self.assertEqual(t.slots, ["QB", "RB", "WR", "TE", "FLEX", "DEF"])
         self.assertNotIn("9", [p.id for p in t.roster])
         by_id = {p.id: p for p in t.roster}
@@ -108,6 +109,7 @@ class SleeperTests(unittest.TestCase):
         self.assertAlmostEqual(by_id["4"].projection, 10)
         self.assertAlmostEqual(by_id["KC"].projection, 7)
         self.assertEqual(by_id["KC"].name, "Kansas City Chiefs")
+        self.assertEqual(by_id["3"].injury_status, "Questionable")
 
         report = analyze(t)
         best = {slot: p.id for slot, p in zip(report.best.slots, report.best.players)}

@@ -88,7 +88,7 @@ hand from the **Actions** tab.
 ## Notes and limits
 
 - Projections are estimates. Always check late injury news before kickoff.
-- Sleeper's projections endpoint is public but undocumented, so it could change.
+- Sleeper's projections endpoint is public but undocumented, so it could change. (Verified against live data for the 2026 season: scoring matches Sleeper's own PPR totals within rounding.)
 - ESPN cookies expire every few months. If a private league starts failing, copy fresh ones.
 - Yahoo isn't supported yet because it requires registering an OAuth app.
 

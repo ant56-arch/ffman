@@ -25,37 +25,41 @@ def load_players() -> dict:
     return get_json_cached("sleeper_players.json", f"{BASE}/players/nfl", max_age_hours=24)
 
 
-def load_projections(season: int, week: int) -> dict[str, dict]:
-    """Return {player_id: stats} for the week, accepting either API shape."""
-    attempts = [
-        (f"{BASE}/projections/nfl/regular/{season}/{week}", None),
-        (f"https://api.sleeper.com/projections/nfl/{season}/{week}",
-         {"season_type": "regular", "position[]": PROJECTION_POSITIONS}),
-    ]
-    last_error: Exception | None = None
-    for url, params in attempts:
-        try:
-            data = get_json(url, params=params)
-        except FetchError as exc:
-            last_error = exc
-            continue
-        if isinstance(data, dict) and data:
-            return {str(pid): stats or {} for pid, stats in data.items()}
-        if isinstance(data, list) and data:
-            return {str(row["player_id"]): row.get("stats") or {} for row in data if "player_id" in row}
-    if last_error:
-        raise last_error
-    return {}
+def load_projections(season: int, week: int) -> tuple[dict[str, dict], dict[str, str | None]]:
+    """Return ({player_id: projected stats}, {player_id: live injury status}).
+
+    The api.sleeper.com endpoint has full stat lines plus up-to-the-minute
+    injury designations; the older v1 endpoint is only a fallback.
+    """
+    try:
+        rows = get_json(f"https://api.sleeper.com/projections/nfl/{season}/{week}",
+                        params={"season_type": "regular", "position[]": PROJECTION_POSITIONS})
+    except FetchError:
+        rows = None
+    if isinstance(rows, list) and rows:
+        stats = {str(r["player_id"]): r.get("stats") or {} for r in rows if "player_id" in r}
+        statuses = {str(r["player_id"]): (r.get("player") or {}).get("injury_status")
+                    for r in rows if "player_id" in r and isinstance(r.get("player"), dict)}
+        return stats, statuses
+    data = get_json(f"{BASE}/projections/nfl/regular/{season}/{week}") or {}
+    return {str(pid): s or {} for pid, s in data.items()}, {}
 
 
-def score(stats: dict, scoring: dict, positions: set[str]) -> float:
-    """Apply a league's scoring settings to a projected stat line."""
+# Projected stats that are context, not scoring categories.
+_NOT_SCORED = {"gp", "pts_allow", "yds_allow", "adp_dd_ppr", "pos_adp_dd_ppr",
+               "pts_ppr", "pts_half_ppr", "pts_std"}
+
+
+def score(stats: dict, scoring: dict) -> float:
+    """Apply a league's scoring settings to a projected stat line.
+
+    Sleeper's projections already carry bonus keys (bonus_rec_te, buckets like
+    pts_allow_14_20), so a straight dot product honours TE premium etc.
+    """
     total = 0.0
     for key, value in stats.items():
-        if key in scoring and isinstance(value, (int, float)):
+        if key in scoring and key not in _NOT_SCORED and isinstance(value, (int, float)):
             total += value * scoring[key]
-    for pos in positions:  # position-specific reception bonuses (e.g. TE premium)
-        total += stats.get("rec", 0) * scoring.get(f"bonus_rec_{pos.lower()}", 0)
     if total == 0:
         ppr = scoring.get("rec", 0)
         key = "pts_ppr" if ppr >= 1 else "pts_half_ppr" if ppr >= 0.5 else "pts_std"
@@ -63,7 +67,7 @@ def score(stats: dict, scoring: dict, positions: set[str]) -> float:
     return round(total, 2)
 
 
-def _player(pid: str, players: dict, projections: dict, scoring: dict) -> Player:
+def _player(pid: str, players: dict, projections: dict, statuses: dict, scoring: dict) -> Player:
     info = players.get(pid, {})
     positions = set(info.get("fantasy_positions") or [info.get("position") or "?"])
     if pid.isalpha() and pid.isupper():  # team defenses are keyed by abbreviation
@@ -77,8 +81,8 @@ def _player(pid: str, players: dict, projections: dict, scoring: dict) -> Player
         position=info.get("position") or next(iter(positions)),
         team=info.get("team") or (pid if positions == {"DEF"} else None),
         eligible=eligible_slots(positions),
-        projection=score(projections.get(pid, {}), scoring, positions),
-        injury_status=info.get("injury_status"),
+        projection=score(projections.get(pid, {}), scoring),
+        injury_status=statuses[pid] if pid in statuses else info.get("injury_status"),
     )
 
 
@@ -98,7 +102,7 @@ def fetch_teams(config: dict, season: int, week: int) -> list[Team]:
         return []
 
     players = load_players()
-    projections = load_projections(season, week)
+    projections, statuses = load_projections(season, week)
     teams = []
     for league_id in league_ids:
         league = get_json(f"{BASE}/league/{league_id}")
@@ -110,16 +114,17 @@ def fetch_teams(config: dict, season: int, week: int) -> list[Team]:
         )
         if mine is None:
             continue
-        teams.append(build_team(league, mine, players, projections, week))
+        teams.append(build_team(league, mine, players, projections, week, statuses))
     return teams
 
 
-def build_team(league: dict, roster: dict, players: dict, projections: dict, week: int) -> Team:
+def build_team(league: dict, roster: dict, players: dict, projections: dict, week: int,
+               statuses: dict | None = None) -> Team:
     scoring = league.get("scoring_settings") or {}
     slots = [SLOT_ALIASES.get(s, s) for s in league.get("roster_positions", []) if s not in NON_STARTING]
     unavailable = set(roster.get("reserve") or []) | set(roster.get("taxi") or [])
     all_ids = [pid for pid in (roster.get("players") or []) if pid not in unavailable]
-    by_id = {pid: _player(pid, players, projections, scoring) for pid in all_ids}
+    by_id = {pid: _player(pid, players, projections, statuses or {}, scoring) for pid in all_ids}
 
     starters = list(roster.get("starters") or [])
     starters += ["0"] * (len(slots) - len(starters))
