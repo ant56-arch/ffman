@@ -30,11 +30,19 @@ def analyze(team: Team, min_gain: float = 0.5) -> LeagueReport:
     current_ids = {p.id for p in team.current.starters}
     best_ids = {p.id for p in best.starters}
 
-    ins = sorted((p for p in best.starters if p.id not in current_ids),
-                 key=lambda p: -p.effective_projection)
-    outs = sorted((p for p in team.current.starters if p.id not in best_ids),
-                  key=lambda p: -p.effective_projection)
-    start = [(p, outs[i] if i < len(outs) else None) for i, p in enumerate(ins)]
+    ins = [p for p in best.starters if p.id not in current_ids]
+    outs = [p for p in team.current.starters if p.id not in best_ids]
+    # Pair each new starter with whoever held the same slot, then the rest by projection.
+    start: list[tuple[Player, Player | None]] = []
+    for new, old in zip(best.players, team.current.players):
+        if new in ins and old in outs:
+            start.append((new, old))
+            ins.remove(new)
+            outs.remove(old)
+    ins.sort(key=lambda p: -p.effective_projection)
+    outs.sort(key=lambda p: -p.effective_projection)
+    start += [(p, outs[i] if i < len(outs) else None) for i, p in enumerate(ins)]
+    start.sort(key=lambda pair: -pair[0].effective_projection)
 
     warnings = []
     for slot, player in zip(best.slots, best.players):
@@ -42,6 +50,8 @@ def analyze(team: Team, min_gain: float = 0.5) -> LeagueReport:
             warnings.append(f"No one on your roster can fill {slot} - grab someone off waivers.")
         elif player.is_out:
             warnings.append(f"{player.label()} is {player.status_label} but is your only {slot} option - check waivers.")
+        elif player.bye:
+            warnings.append(f"{player.label()} is on bye and is your best {slot} option - check waivers.")
         elif player.effective_projection == 0:
             warnings.append(f"{player.label()} is projected 0 (bye week?) and is your best {slot} option - check waivers.")
         elif (player.injury_status or "").upper() in RISKY_STATUSES:

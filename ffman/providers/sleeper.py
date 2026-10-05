@@ -25,8 +25,8 @@ def load_players() -> dict:
     return get_json_cached("sleeper_players.json", f"{BASE}/players/nfl", max_age_hours=24)
 
 
-def load_projections(season: int, week: int) -> tuple[dict[str, dict], dict[str, str | None]]:
-    """Return ({player_id: projected stats}, {player_id: live injury status}).
+def load_projections(season: int, week: int) -> tuple[dict[str, dict], dict[str, str | None], set[str]]:
+    """Return ({player_id: projected stats}, {player_id: live injury status}, teams playing).
 
     The api.sleeper.com endpoint has full stat lines plus up-to-the-minute
     injury designations; the older v1 endpoint is only a fallback.
@@ -40,9 +40,10 @@ def load_projections(season: int, week: int) -> tuple[dict[str, dict], dict[str,
         stats = {str(r["player_id"]): r.get("stats") or {} for r in rows if "player_id" in r}
         statuses = {str(r["player_id"]): (r.get("player") or {}).get("injury_status")
                     for r in rows if "player_id" in r and isinstance(r.get("player"), dict)}
-        return stats, statuses
+        playing = {r["team"] for r in rows if r.get("team") and r.get("opponent")}
+        return stats, statuses, playing
     data = get_json(f"{BASE}/projections/nfl/regular/{season}/{week}") or {}
-    return {str(pid): s or {} for pid, s in data.items()}, {}
+    return {str(pid): s or {} for pid, s in data.items()}, {}, set()
 
 
 # Projected stats that are context, not scoring categories.
@@ -67,11 +68,13 @@ def score(stats: dict, scoring: dict) -> float:
     return round(total, 2)
 
 
-def _player(pid: str, players: dict, projections: dict, statuses: dict, scoring: dict) -> Player:
+def _player(pid: str, players: dict, projections: dict, statuses: dict, playing: set[str],
+            scoring: dict) -> Player:
     info = players.get(pid, {})
     positions = set(info.get("fantasy_positions") or [info.get("position") or "?"])
     if pid.isalpha() and pid.isupper():  # team defenses are keyed by abbreviation
         positions = {"DEF"}
+    team = info.get("team") or (pid if positions == {"DEF"} else None)
     name = info.get("full_name") or " ".join(
         part for part in (info.get("first_name"), info.get("last_name")) if part
     ) or pid
@@ -79,10 +82,11 @@ def _player(pid: str, players: dict, projections: dict, statuses: dict, scoring:
         id=pid,
         name=name,
         position=info.get("position") or next(iter(positions)),
-        team=info.get("team") or (pid if positions == {"DEF"} else None),
+        team=team,
         eligible=eligible_slots(positions),
         projection=score(projections.get(pid, {}), scoring),
         injury_status=statuses[pid] if pid in statuses else info.get("injury_status"),
+        bye=bool(playing) and team is not None and team not in playing,
     )
 
 
@@ -102,7 +106,7 @@ def fetch_teams(config: dict, season: int, week: int) -> list[Team]:
         return []
 
     players = load_players()
-    projections, statuses = load_projections(season, week)
+    projections, statuses, playing = load_projections(season, week)
     teams = []
     for league_id in league_ids:
         league = get_json(f"{BASE}/league/{league_id}")
@@ -114,17 +118,20 @@ def fetch_teams(config: dict, season: int, week: int) -> list[Team]:
         )
         if mine is None:
             continue
-        teams.append(build_team(league, mine, players, projections, week, statuses))
+        teams.append(build_team(league, mine, players, projections, week, statuses, playing,
+                                user.get("display_name")))
     return teams
 
 
 def build_team(league: dict, roster: dict, players: dict, projections: dict, week: int,
-               statuses: dict | None = None) -> Team:
+               statuses: dict | None = None, playing: set[str] | None = None,
+               owner_name: str | None = None) -> Team:
     scoring = league.get("scoring_settings") or {}
     slots = [SLOT_ALIASES.get(s, s) for s in league.get("roster_positions", []) if s not in NON_STARTING]
     unavailable = set(roster.get("reserve") or []) | set(roster.get("taxi") or [])
     all_ids = [pid for pid in (roster.get("players") or []) if pid not in unavailable]
-    by_id = {pid: _player(pid, players, projections, statuses or {}, scoring) for pid in all_ids}
+    by_id = {pid: _player(pid, players, projections, statuses or {}, playing or set(), scoring)
+             for pid in all_ids}
 
     starters = list(roster.get("starters") or [])
     starters += ["0"] * (len(slots) - len(starters))
@@ -134,7 +141,7 @@ def build_team(league: dict, roster: dict, players: dict, projections: dict, wee
     return Team(
         platform="Sleeper",
         league_name=league.get("name", league.get("league_id", "Sleeper league")),
-        team_name=meta.get("team_name") or "My team",
+        team_name=meta.get("team_name") or owner_name or "My team",
         week=week,
         slots=slots,
         roster=list(by_id.values()),

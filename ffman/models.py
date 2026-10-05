@@ -41,6 +41,7 @@ class Player:
     eligible: set[str] = field(default_factory=set)
     projection: float = 0.0
     injury_status: str | None = None
+    bye: bool = False
 
     @property
     def is_out(self) -> bool:
@@ -60,7 +61,8 @@ class Player:
 
     def label(self, with_status: bool = False) -> str:
         team = f", {self.team}" if self.team else ""
-        status = f" [{self.status_label}]" if with_status and self.status_label else ""
+        tag = "Bye" if self.bye else self.status_label
+        status = f" [{tag}]" if with_status and tag else ""
         return f"{self.name} ({self.position}{team}){status}"
 
 

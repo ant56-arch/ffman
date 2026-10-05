@@ -61,6 +61,12 @@ class ReportTests(unittest.TestCase):
         self.assertIn("START Player wr2", text)
         self.assertIn("1 of 1 leagues have changes", text)
 
+    def test_pairs_by_slot(self):
+        roster = [player("qb1", "QB", 0), player("qb2", "QB", 15), player("wr1", "WR", 10),
+                  player("rb1", "RB", 20), player("rb2", "RB", 0)]
+        report = analyze(team(["QB", "RB", "WR"], roster, ["qb1", "rb2", "wr1"]))
+        self.assertEqual([(s.id, b.id) for s, b in report.start], [("rb1", "rb2"), ("qb2", "qb1")])
+
     def test_small_gain_is_not_flagged(self):
         roster = [player("a", "WR", 10), player("b", "WR", 10.2)]
         report = analyze(team(["WR"], roster, ["a"]), min_gain=0.5)
@@ -101,7 +107,9 @@ class SleeperTests(unittest.TestCase):
             "KC": {"pts_ppr": 7.0, "gp": 1},               # fallback to pts_ppr
         }
         # Live status from the projections feed overrides the cached player file.
-        t = sleeper.build_team(league, roster, players, projections, 5, {"3": "Questionable"})
+        playing = {"BUF", "SF", "MIA", "DET", "DAL"}  # KC on bye
+        t = sleeper.build_team(league, roster, players, projections, 5, {"3": "Questionable"},
+                               playing, "Trotta5")
         self.assertEqual(t.slots, ["QB", "RB", "WR", "TE", "FLEX", "DEF"])
         self.assertNotIn("9", [p.id for p in t.roster])
         by_id = {p.id: p for p in t.roster}
@@ -110,6 +118,9 @@ class SleeperTests(unittest.TestCase):
         self.assertAlmostEqual(by_id["KC"].projection, 7)
         self.assertEqual(by_id["KC"].name, "Kansas City Chiefs")
         self.assertEqual(by_id["3"].injury_status, "Questionable")
+        self.assertTrue(by_id["4"].bye and by_id["KC"].bye)
+        self.assertFalse(by_id["1"].bye)
+        self.assertEqual(t.team_name, "Bros")
 
         report = analyze(t)
         best = {slot: p.id for slot, p in zip(report.best.slots, report.best.players)}
