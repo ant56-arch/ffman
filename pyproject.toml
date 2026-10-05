@@ -10,6 +10,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+site = ["cryptography"]  # only for password-protecting the website
+
 [project.scripts]
 ffman = "ffman.cli:main"
 

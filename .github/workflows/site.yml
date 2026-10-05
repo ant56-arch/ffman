@@ -31,10 +31,25 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Check the site is password-protected and configured
+        env:
+          FFMAN_CONFIG: ${{ secrets.FFMAN_CONFIG }}
+          FFMAN_SITE_USER: ${{ secrets.FFMAN_SITE_USER }}
+          FFMAN_SITE_PASSWORD: ${{ secrets.FFMAN_SITE_PASSWORD }}
+        run: |
+          # Never publish rosters without a login.
+          if [ -z "$FFMAN_SITE_USER" ] || [ -z "$FFMAN_SITE_PASSWORD" ]; then
+            echo "::error::Add FFMAN_SITE_USER and FFMAN_SITE_PASSWORD repository secrets (see README)."; exit 1
+          fi
+          if [ -z "$FFMAN_CONFIG" ]; then
+            echo "::error::Add an FFMAN_CONFIG repository secret with your config.toml contents (see README)."; exit 1
+          fi
+      - run: pip install cryptography
       - name: Build lineup recommendations
         env:
-          # Uses config.toml from the repo unless an FFMAN_CONFIG secret overrides it.
           FFMAN_CONFIG: ${{ secrets.FFMAN_CONFIG }}
+          FFMAN_SITE_USER: ${{ secrets.FFMAN_SITE_USER }}
+          FFMAN_SITE_PASSWORD: ${{ secrets.FFMAN_SITE_PASSWORD }}
           ESPN_S2: ${{ secrets.ESPN_S2 }}
           ESPN_SWID: ${{ secrets.ESPN_SWID }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}

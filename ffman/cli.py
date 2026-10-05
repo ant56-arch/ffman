@@ -111,8 +111,15 @@ def cmd_run(args) -> int:
     if args.output:
         Path(args.output).write_text(text)
     if args.html:
+        user, password = os.environ.get("FFMAN_SITE_USER"), os.environ.get("FFMAN_SITE_PASSWORD")
+        page = web.full_page(web.render_dashboard(reports, shown_week, errors, logout=bool(password)))
+        if user and password:
+            from .lock import login_page
+            page = login_page(page, user, password)
+        elif user or password:
+            sys.exit("Set both FFMAN_SITE_USER and FFMAN_SITE_PASSWORD to lock the page.")
         Path(args.html).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.html).write_text(web.full_page(web.render_dashboard(reports, shown_week, errors)))
+        Path(args.html).write_text(page)
         print(f"Wrote {args.html}", file=sys.stderr)
     if summary_file := os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(summary_file, "a") as fh:

@@ -129,6 +129,8 @@ tr.new td { background: var(--turf-soft); }
 .problems h2 { font: 800 18px var(--display); text-transform: uppercase; margin: 0 0 4px; color: var(--bad); }
 .problems ul { margin: 0; padding-left: 18px; }
 footer { color: var(--muted); font-size: 12px; }
+.lockbtn { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 6px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface); color: var(--muted); }
 @media (max-width: 560px) {
   .move { grid-template-columns: 1fr auto; }
   .move .arrow { display: none; }
@@ -232,8 +234,16 @@ def _league(r: LeagueReport, anchor: str) -> str:
     return "".join(parts)
 
 
+LOCK_BUTTON = (
+    '<button type="button" class="lockbtn" '
+    "onclick=\"try{localStorage.removeItem('ffman-key')}catch(e){};location.reload()\">"
+    "Log out</button>"
+)
+
+
 def render_dashboard(reports: list[LeagueReport], week: int | None, errors: list[str],
-                     generated: dt.datetime | None = None, week_picker: bool = False) -> str:
+                     generated: dt.datetime | None = None, week_picker: bool = False,
+                     logout: bool = False) -> str:
     """The page body: <title>, styles and content (no <html>/<body> wrapper)."""
     generated = generated or dt.datetime.now().astimezone()
     ordered = sorted(reports, key=lambda r: (not r.needs_changes, -r.gain))
@@ -250,6 +260,8 @@ def render_dashboard(reports: list[LeagueReport], week: int | None, errors: list
         out.append('<form class="weekform" method="get"><label for="week">Show</label>'
                    f'<select id="week" name="week">{options}</select>'
                    '<button type="submit">Refresh</button></form>')
+    if logout:
+        out.append(LOCK_BUTTON)
     out.append("</header>")
 
     out.append('<div class="strip">'

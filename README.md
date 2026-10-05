@@ -95,15 +95,26 @@ on Sunday (after inactives and before the late games).
 One-time setup:
 
 1. **Settings → Pages → Build and deployment → Source:** choose **GitHub Actions**.
-2. **Settings → Secrets and variables → Actions → New repository secret.** Add these only for
-   private ESPN leagues:
-   - `ESPN_S2`: your espn_s2 cookie
-   - `ESPN_SWID`: your SWID cookie, including the `{ }`
+2. **Settings → Secrets and variables → Actions → New repository secret.** Add:
+   - `FFMAN_CONFIG`: the whole contents of your config.toml. Your leagues stay out of the
+     public repo.
+   - `FFMAN_SITE_USER` and `FFMAN_SITE_PASSWORD`: the login for the website.
+   - `ESPN_S2` and `ESPN_SWID`: your ESPN cookies, only needed for private leagues. Include
+     the `{ }` in SWID.
 3. **Actions → Website → Run workflow** builds it the first time. After that it runs on its own.
 
-Leagues come from `config.toml` in the repo. To keep them out of a public repo, add an
-`FFMAN_CONFIG` secret containing the whole config instead. The site itself is public: anyone
-with the link can see your rosters and recommendations, but never your cookies.
+### The login
+
+GitHub Pages can't run a login server, so ffman **encrypts the whole page** (AES-256) with
+a key made from your username and password. Visitors see only a login box; the page is
+decrypted in the browser after a correct login. "Remember this device" keeps you logged in
+until you press **Log out**. The workflow refuses to publish if the login secrets are missing.
+
+Use a strong password, since anyone can download the encrypted page and try guesses offline.
+A long passphrase of four or more random words is plenty.
+
+To lock a page you build yourself, set `FFMAN_SITE_USER` and `FFMAN_SITE_PASSWORD` before
+running `ffman --html ...` (requires `pip install cryptography`).
 
 For phone alerts on the Thursday and Sunday runs, install the free [ntfy](https://ntfy.sh)
 app, subscribe to a topic name that's hard to guess, and set `ntfy_topic` under `[notify]`.

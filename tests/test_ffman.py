@@ -1,4 +1,5 @@
 import unittest
+import unittest.mock
 
 from ffman.models import Lineup, Player, Team, eligible_slots
 from ffman.optimizer import optimal_lineup
@@ -98,6 +99,23 @@ class WebTests(unittest.TestCase):
         self.assertIn("1 move<", page)
         self.assertIn('name="week"', page)
         self.assertIn("ESPN 1: private", page)
+
+
+class LockTests(unittest.TestCase):
+    def test_page_decrypts_only_with_right_login(self):
+        import base64, json, re
+        from cryptography.exceptions import InvalidTag
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+        from ffman import lock
+        with unittest.mock.patch.object(lock, "ITERATIONS", 1000):
+            page = lock.login_page("<p>secret roster</p>", "Tony", "hunter22")
+            self.assertNotIn("secret roster", page)
+            payload = json.loads(re.search(r'id="payload">(.*?)</script>', page).group(1))
+            iv, data = base64.b64decode(payload["iv"]), base64.b64decode(payload["data"])
+            right = lock.derive_key(" tony ", "hunter22")  # username is case/space-insensitive
+            self.assertEqual(AESGCM(right).decrypt(iv, data, None), b"<p>secret roster</p>")
+            with self.assertRaises(InvalidTag):
+                AESGCM(lock.derive_key("tony", "hunter2")).decrypt(iv, data, None)
 
 
 class SleeperTests(unittest.TestCase):
