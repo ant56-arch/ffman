@@ -52,6 +52,7 @@ jobs:
           FFMAN_SITE_PASSWORD: ${{ secrets.FFMAN_SITE_PASSWORD }}
           ESPN_S2: ${{ secrets.ESPN_S2 }}
           ESPN_SWID: ${{ secrets.ESPN_SWID }}
+          SWID: ${{ secrets.SWID }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           WEEK: ${{ github.event.inputs.week }}
           TZ: America/New_York
