@@ -31,8 +31,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build:
+  # One job builds and publishes, so it never waits in line for a second machine
+  # (a separate deploy job once sat queued for 15 minutes and was cancelled).
+  publish:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url || steps.deploy-retry.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -70,13 +76,14 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
+      - id: deploy
         uses: actions/deploy-pages@v4
+        continue-on-error: true  # GitHub Pages hiccups now and then; retry once below
+        timeout-minutes: 8
+      - name: Wait before retrying
+        if: steps.deploy.outcome == 'failure'
+        run: sleep 30
+      - id: deploy-retry
+        if: steps.deploy.outcome == 'failure'
+        uses: actions/deploy-pages@v4
+        timeout-minutes: 8
