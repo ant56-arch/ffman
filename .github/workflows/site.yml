@@ -1,0 +1,59 @@
+# Builds the ffman website with fresh recommendations and publishes it to GitHub Pages.
+# Read-only: it never changes a lineup. Setup is in README.md ("GitHub website").
+name: Website
+
+on:
+  schedule:
+    - cron: "0 13 * * *"    # every morning ~9am ET (picks up the new week, waiver moves)
+    - cron: "0 22 * * 4"    # Thursday ~6pm ET, before Thursday Night Football
+    - cron: "45 15 * * 0"   # Sunday ~11:45am ET, after inactives are announced
+    - cron: "45 18 * * 0"   # Sunday ~2:45pm ET, before the late games
+  workflow_dispatch:
+    inputs:
+      week:
+        description: "NFL week (blank = current)"
+        required: false
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build lineup recommendations
+        env:
+          # Uses config.toml from the repo unless an FFMAN_CONFIG secret overrides it.
+          FFMAN_CONFIG: ${{ secrets.FFMAN_CONFIG }}
+          ESPN_S2: ${{ secrets.ESPN_S2 }}
+          ESPN_SWID: ${{ secrets.ESPN_SWID }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          WEEK: ${{ github.event.inputs.week }}
+          TZ: America/New_York
+        run: |
+          # Phone/Discord alerts only on the Thursday and Sunday checks, not every daily rebuild.
+          case "${{ github.event.schedule }}" in "0 13 * * *"|"") NOTIFY="" ;; *) NOTIFY="--notify" ;; esac
+          python -m ffman --html _site/index.html $NOTIFY ${WEEK:+--week "$WEEK"}
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

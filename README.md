@@ -86,21 +86,28 @@ so refreshing doesn't flood the APIs. The week picker in the top corner switches
 `min_gain` under `[settings]` (default 0.5) is the smallest projected improvement worth
 telling you about. It stops coin-flip swaps from cluttering the report.
 
-## Run it automatically
+## GitHub website
 
-To have ffman check every league for you on Thursdays (before TNF) and Sunday mornings
-(after inactives), use the included GitHub Actions workflow:
+GitHub can host the dashboard for free at `https://<your-username>.github.io/ffman/` and keep
+it fresh. The `Website` workflow rebuilds it every morning, on Thursday before TNF, and twice
+on Sunday (after inactives and before the late games).
 
-1. Push this repo to GitHub (a private repo is fine).
-2. Under **Settings → Secrets and variables → Actions**, add these secrets:
-   - `FFMAN_CONFIG`: the full contents of your config.toml
-   - `ESPN_S2` and `ESPN_SWID`: only needed for private ESPN leagues
-   - `DISCORD_WEBHOOK`: optional
-3. For phone alerts, install the free [ntfy](https://ntfy.sh) app, subscribe to a topic name
-   that's hard to guess, and set `ntfy_topic` under `[notify]` in your config.
+One-time setup:
 
-The full report appears on each workflow run's summary page. You can also trigger a run by
-hand from the **Actions** tab.
+1. **Settings → Pages → Build and deployment → Source:** choose **GitHub Actions**.
+2. **Settings → Secrets and variables → Actions → New repository secret.** Add these only for
+   private ESPN leagues:
+   - `ESPN_S2`: your espn_s2 cookie
+   - `ESPN_SWID`: your SWID cookie, including the `{ }`
+3. **Actions → Website → Run workflow** builds it the first time. After that it runs on its own.
+
+Leagues come from `config.toml` in the repo. To keep them out of a public repo, add an
+`FFMAN_CONFIG` secret containing the whole config instead. The site itself is public: anyone
+with the link can see your rosters and recommendations, but never your cookies.
+
+For phone alerts on the Thursday and Sunday runs, install the free [ntfy](https://ntfy.sh)
+app, subscribe to a topic name that's hard to guess, and set `ntfy_topic` under `[notify]`.
+For Discord, add a `DISCORD_WEBHOOK` secret and set `discord_webhook = "env:DISCORD_WEBHOOK"`.
 
 ## Notes and limits
 

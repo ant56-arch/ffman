@@ -43,10 +43,21 @@ def load_config(path: str) -> dict:
     return _expand(tomllib.loads(file.read_text()))
 
 
+def week_from_calendar(season_start: str, today: dt.date) -> int:
+    """NFL week whose lineups are still being set: weeks roll over each Tuesday."""
+    start = dt.date.fromisoformat(season_start)
+    first_tuesday = start - dt.timedelta(days=(start.weekday() - 1) % 7)
+    return min(max((today - first_tuesday).days // 7 + 1, 1), 18)
+
+
 def current_season_and_week() -> tuple[int, int | None]:
     try:
         state = sleeper.nfl_state()
-        return int(state.get("league_season") or state["season"]), int(state.get("week") or 1)
+        week = int(state.get("week") or 1)
+        if state.get("season_type") == "regular" and state.get("season_start_date"):
+            # Sleeper can lag a day or two after Monday night; don't show a finished week.
+            week = max(week, week_from_calendar(state["season_start_date"], dt.date.today()))
+        return int(state.get("league_season") or state["season"]), week
     except (FetchError, KeyError, ValueError):
         today = dt.date.today()
         return (today.year if today.month >= 8 else today.year - 1), None
@@ -100,6 +111,7 @@ def cmd_run(args) -> int:
     if args.output:
         Path(args.output).write_text(text)
     if args.html:
+        Path(args.html).parent.mkdir(parents=True, exist_ok=True)
         Path(args.html).write_text(web.full_page(web.render_dashboard(reports, shown_week, errors)))
         print(f"Wrote {args.html}", file=sys.stderr)
     if summary_file := os.environ.get("GITHUB_STEP_SUMMARY"):

@@ -74,6 +74,17 @@ class ReportTests(unittest.TestCase):
         self.assertIn("No changes needed", render([report]))
 
 
+class WeekTests(unittest.TestCase):
+    def test_week_rolls_over_on_tuesday(self):
+        import datetime as dt
+        from ffman.cli import week_from_calendar
+        start = "2026-09-09"  # season opener week; Tuesday before is Sep 8
+        self.assertEqual(week_from_calendar(start, dt.date(2026, 9, 10)), 1)
+        self.assertEqual(week_from_calendar(start, dt.date(2026, 10, 5)), 4)   # Monday night
+        self.assertEqual(week_from_calendar(start, dt.date(2026, 10, 6)), 5)   # Tuesday
+        self.assertEqual(week_from_calendar(start, dt.date(2027, 3, 1)), 18)
+
+
 class WebTests(unittest.TestCase):
     def test_dashboard_renders_and_escapes(self):
         from ffman import web
