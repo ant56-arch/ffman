@@ -15,12 +15,12 @@ username = "your_sleeper_username"
 # league_id is in the league URL: fantasy.espn.com/football/league?leagueId=123456
 # team_id is in your team URL (...&teamId=3). Private leagues also need the
 # espn_s2 and SWID cookies from your browser (DevTools > Application > Cookies).
+# Put them in environment variables named espn_s2 and SWID (ESPN_S2 / ESPN_SWID
+# also work); they're picked up automatically. Setting them here also works.
 [[espn]]
 name = "Work league"
 league_id = 123456
 team_id = 3
-espn_s2 = "env:ESPN_S2"
-swid = "env:ESPN_SWID"
 
 # [[espn]]
 # name = "Family league"

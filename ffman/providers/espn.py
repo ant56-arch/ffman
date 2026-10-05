@@ -7,6 +7,8 @@ are ESPN's own, already scored with the league's settings.
 
 from __future__ import annotations
 
+import os
+
 from ..http import FetchError, get_json
 from ..models import Lineup, Player, Team
 
@@ -29,18 +31,33 @@ PRO_TEAMS = {
 }
 
 
+def _cookie(config: dict, key: str, env_names: tuple[str, ...]) -> str | None:
+    """Config value first, else an env var named like the cookie or ESPN_-prefixed."""
+    if config.get(key):
+        return config[key]
+    return next((os.environ[n] for n in env_names if os.environ.get(n)), None)
+
+
+def cookies_for(config: dict) -> dict:
+    return {
+        "espn_s2": _cookie(config, "espn_s2", ("ESPN_S2", "espn_s2")),
+        "SWID": _cookie(config, "swid", ("ESPN_SWID", "SWID", "swid")),
+    }
+
+
 def fetch_league(config: dict, season: int, week: int | None) -> dict:
     params: dict = {"view": ["mTeam", "mRoster", "mSettings"]}
     if week:
         params["scoringPeriodId"] = week
-    cookies = {"espn_s2": config.get("espn_s2"), "SWID": config.get("swid")}
+    cookies = cookies_for(config)
     url = f"{BASE}/seasons/{season}/segments/0/leagues/{config['league_id']}"
     try:
         return get_json(url, params=params, cookies=cookies)
     except FetchError as exc:
         if "HTTP 401" in str(exc) or "HTTP 403" in str(exc):
             raise FetchError(
-                f"ESPN league {config['league_id']} is private: add espn_s2 and swid to the config"
+                f"ESPN league {config['league_id']} is private (or the cookies expired): "
+                "set the espn_s2 and SWID environment variables"
             ) from exc
         raise
 
@@ -74,7 +91,7 @@ def _find_my_team(data: dict, config: dict) -> dict:
             if team.get("id") == int(config["team_id"]):
                 return team
         raise FetchError(f"ESPN league {config['league_id']}: no team with id {config['team_id']}")
-    swid = (config.get("swid") or "").upper()
+    swid = (cookies_for(config)["SWID"] or "").upper()
     for team in teams:
         if swid and swid in [o.upper() for o in team.get("owners") or []]:
             return team

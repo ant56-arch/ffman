@@ -172,5 +172,15 @@ class EspnTests(unittest.TestCase):
         self.assertEqual(espn.build_team(data, {"league_id": 1, "team_id": 1}, 5).team_name, "A")
 
 
+class EspnCookieTests(unittest.TestCase):
+    def test_env_names_match_cookie_names(self):
+        from unittest import mock
+        with mock.patch.dict("os.environ", {"espn_s2": "abc", "SWID": "{X}"}, clear=True):
+            self.assertEqual(espn.cookies_for({}), {"espn_s2": "abc", "SWID": "{X}"})
+        with mock.patch.dict("os.environ", {"ESPN_S2": "a", "ESPN_SWID": "{Y}"}, clear=True):
+            self.assertEqual(espn.cookies_for({}), {"espn_s2": "a", "SWID": "{Y}"})
+            self.assertEqual(espn.cookies_for({"swid": "{Z}"})["SWID"], "{Z}")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,12 @@
+# Your leagues. No secrets here: the private-ESPN cookies come from the
+# espn_s2 and SWID environment variables.
+
+[settings]
+min_gain = 0.5
+
+[sleeper]
+username = "Trotta5"
+
+[[espn]]
+league_id = 1593571111
+team_id = 1

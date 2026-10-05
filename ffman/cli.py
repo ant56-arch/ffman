@@ -28,6 +28,12 @@ def _expand(value):
     return value
 
 
+def default_config_path() -> str:
+    if env := os.environ.get("FFMAN_CONFIG_PATH"):
+        return env
+    return "config.toml" if Path("config.toml").exists() else "~/.config/ffman/config.toml"
+
+
 def load_config(path: str) -> dict:
     if inline := os.environ.get("FFMAN_CONFIG"):
         return _expand(tomllib.loads(inline))
@@ -103,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
         prog="ffman",
         description="Read-only fantasy football lineup advisor. Never changes your lineups.",
     )
-    parser.add_argument("--config", default=os.environ.get("FFMAN_CONFIG_PATH", "~/.config/ffman/config.toml"))
+    parser.add_argument("--config", default=default_config_path())
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("init", help="create a starter config file")
     run = sub.add_parser("run", help="check every league and recommend lineups (default)")

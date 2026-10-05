@@ -45,14 +45,16 @@ pip install .            # or skip this and use `python -m ffman` from this fold
 ffman init               # writes ~/.config/ffman/config.toml
 ```
 
-Edit `~/.config/ffman/config.toml`:
+Edit the config. ffman uses `./config.toml` in the folder you run it from if there is one,
+otherwise `~/.config/ffman/config.toml`. Leave cookies out of it, because a `config.toml`
+in the repo gets committed:
 
 - **Sleeper:** enter your username. Every league you're in this season is checked.
 - **ESPN:** add one `[[espn]]` block per league with its `league_id` and your `team_id`,
   both of which appear in the URL of your team page. **Private** ESPN leagues also need
   two browser cookies. Log in at espn.com, open DevTools → Application → Cookies, and copy
-  `espn_s2` and `SWID`. Put them in environment variables (`ESPN_S2`, `ESPN_SWID`) rather
-  than in the file.
+  `espn_s2` and `SWID`. Put them in environment variables with those same names
+  (`ESPN_S2` / `ESPN_SWID` also work) rather than in the file.
 
 Then run:
 
