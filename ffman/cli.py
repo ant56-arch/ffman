@@ -9,7 +9,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-from . import notify
+from . import notify, web
 from .http import FetchError
 from .providers import espn, sleeper
 from .report import analyze, render
@@ -78,16 +78,20 @@ def cmd_init(args) -> None:
     print(f"Wrote {target}. Fill in your leagues, then run `ffman`.")
 
 
-def cmd_run(args) -> int:
-    config = load_config(args.config)
+def build_reports(config: dict, args, week: int | None):
+    """Fetch every league and analyze it. Returns (reports, week shown, errors)."""
     settings = config.get("settings", {})
-    season, week = current_season_and_week()
+    season, current_week = current_season_and_week()
     season = args.season or settings.get("season") or season
-    week = args.week or week
-
+    week = week or current_week
     teams, errors = collect_teams(config, season, week, args.league)
     reports = [analyze(t, float(settings.get("min_gain", 0.5))) for t in teams]
-    shown_week = week or (teams[0].week if teams else None)
+    return reports, week or (teams[0].week if teams else None), errors
+
+
+def cmd_run(args) -> int:
+    config = load_config(args.config)
+    reports, shown_week, errors = build_reports(config, args, args.week)
     text = render(reports, shown_week)
     if errors:
         text += "\n## Problems\n" + "\n".join(f"- {e}" for e in errors) + "\n"
@@ -95,13 +99,23 @@ def cmd_run(args) -> int:
     print(text)
     if args.output:
         Path(args.output).write_text(text)
+    if args.html:
+        Path(args.html).write_text(web.full_page(web.render_dashboard(reports, shown_week, errors)))
+        print(f"Wrote {args.html}", file=sys.stderr)
     if summary_file := os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(summary_file, "a") as fh:
             fh.write(text)
     if args.notify and reports:
         channels = notify.send(config.get("notify", {}), notify.summary(reports, shown_week))
         print(f"Notified via: {', '.join(channels) or 'nothing configured'}", file=sys.stderr)
-    return 1 if errors and not teams else 0
+    return 1 if errors and not reports else 0
+
+
+def cmd_serve(args) -> int:
+    config = load_config(args.config)
+    web.serve(lambda week: build_reports(config, args, week or args.week),
+              host=args.host, port=args.port)
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -113,17 +127,24 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="command")
     sub.add_parser("init", help="create a starter config file")
     run = sub.add_parser("run", help="check every league and recommend lineups (default)")
-    for p, default in ((parser, None), (run, argparse.SUPPRESS)):  # options work before or after `run`
+    site = sub.add_parser("serve", help="run the ffman website on this computer")
+    site.add_argument("--port", type=int, default=8000)
+    site.add_argument("--host", default="127.0.0.1",
+                      help="use 0.0.0.0 to open it from your phone on the same Wi-Fi")
+    for p, default in ((parser, None), (run, argparse.SUPPRESS), (site, argparse.SUPPRESS)):
         p.add_argument("--week", type=int, default=default, help="NFL week (default: current)")
         p.add_argument("--season", type=int, default=default, help="season year (default: current)")
         p.add_argument("--league", default=default, help="only leagues whose name contains this text")
         p.add_argument("--output", default=default, help="also write the report to this file")
+        p.add_argument("--html", default=default, help="also write the dashboard web page to this file")
         p.add_argument("--notify", action="store_true", default=default or False,
                        help="send a summary via ntfy/Discord")
     args = parser.parse_args(argv)
     if args.command == "init":
         cmd_init(args)
         return 0
+    if args.command == "serve":
+        return cmd_serve(args)
     return cmd_run(args)
 
 

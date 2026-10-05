@@ -74,6 +74,21 @@ class ReportTests(unittest.TestCase):
         self.assertIn("No changes needed", render([report]))
 
 
+class WebTests(unittest.TestCase):
+    def test_dashboard_renders_and_escapes(self):
+        from ffman import web
+        roster = [player("a", "WR", 18, "Out"), player("b", "WR", 7)]
+        t = team(["WR"], roster, ["a"])
+        t.league_name = "<Bros & Co>"
+        page = web.render_dashboard([analyze(t)], 5, ["ESPN 1: private"], week_picker=True)
+        self.assertIn("<title>ffman Lineups</title>", page)
+        self.assertIn("&lt;Bros &amp; Co&gt;", page)
+        self.assertNotIn("<Bros", page)
+        self.assertIn("1 move<", page)
+        self.assertIn('name="week"', page)
+        self.assertIn("ESPN 1: private", page)
+
+
 class SleeperTests(unittest.TestCase):
     def test_build_team(self):
         league = {

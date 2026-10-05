@@ -66,6 +66,21 @@ ffman --output report.md # also save the report
 ffman --notify           # also send a summary to your phone or Discord
 ```
 
+## The website
+
+ffman also has a dashboard page. It shows every league as a card, with leagues that need
+moves listed first. Each card shows START/SIT pairs and the points each move gains, flags for
+bye weeks and injuries, and the full best lineup.
+
+```bash
+ffman serve                    # open http://127.0.0.1:8000
+ffman serve --host 0.0.0.0     # also reachable from your phone on the same Wi-Fi
+ffman --html lineups.html      # save a one-off copy of the page instead
+```
+
+`ffman serve` pulls fresh data when you load the page. It reuses results for up to 5 minutes
+so refreshing doesn't flood the APIs. The week picker in the top corner switches weeks.
+
 ### Tuning
 
 `min_gain` under `[settings]` (default 0.5) is the smallest projected improvement worth

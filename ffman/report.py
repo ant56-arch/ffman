@@ -13,8 +13,12 @@ class LeagueReport:
     team: Team
     best: Lineup
     start: list[tuple[Player, Player | None]] = field(default_factory=list)  # (start, in place of)
-    warnings: list[str] = field(default_factory=list)
+    alerts: list[tuple[str, str]] = field(default_factory=list)  # (severity "bad"/"warn", text)
     min_gain: float = 0.5
+
+    @property
+    def warnings(self) -> list[str]:
+        return [text for _, text in self.alerts]
 
     @property
     def gain(self) -> float:
@@ -44,19 +48,19 @@ def analyze(team: Team, min_gain: float = 0.5) -> LeagueReport:
     start += [(p, outs[i] if i < len(outs) else None) for i, p in enumerate(ins)]
     start.sort(key=lambda pair: -pair[0].effective_projection)
 
-    warnings = []
+    alerts = []
     for slot, player in zip(best.slots, best.players):
         if player is None:
-            warnings.append(f"No one on your roster can fill {slot} - grab someone off waivers.")
+            alerts.append(("bad", f"No one on your roster can fill {slot} - grab someone off waivers."))
         elif player.is_out:
-            warnings.append(f"{player.label()} is {player.status_label} but is your only {slot} option - check waivers.")
+            alerts.append(("bad", f"{player.label()} is {player.status_label} but is your only {slot} option - check waivers."))
         elif player.bye:
-            warnings.append(f"{player.label()} is on bye and is your best {slot} option - check waivers.")
+            alerts.append(("bad", f"{player.label()} is on bye and is your best {slot} option - check waivers."))
         elif player.effective_projection == 0:
-            warnings.append(f"{player.label()} is projected 0 (bye week?) and is your best {slot} option - check waivers.")
+            alerts.append(("bad", f"{player.label()} is projected 0 (bye week?) and is your best {slot} option - check waivers."))
         elif (player.injury_status or "").upper() in RISKY_STATUSES:
-            warnings.append(f"{player.label()} is {player.status_label} - check news before kickoff.")
-    return LeagueReport(team, best, start, warnings, min_gain)
+            alerts.append(("warn", f"{player.label()} is {player.status_label} - check news before kickoff."))
+    return LeagueReport(team, best, start, alerts, min_gain)
 
 
 def _pts(value: float) -> str:
