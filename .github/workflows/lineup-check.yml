@@ -1,0 +1,30 @@
+# Checks every league on a schedule and sends you recommendations.
+# Read-only: it never changes a lineup. Setup is in README.md ("Run it automatically").
+name: Lineup check
+
+on:
+  schedule:
+    - cron: "0 22 * * 4"   # Thursday ~6pm ET, before Thursday Night Football
+    - cron: "45 15 * * 0"  # Sunday ~11:45am ET, after inactives are announced
+  workflow_dispatch:
+    inputs:
+      week:
+        description: "NFL week (blank = current)"
+        required: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Recommend lineups
+        env:
+          FFMAN_CONFIG: ${{ secrets.FFMAN_CONFIG }}
+          ESPN_S2: ${{ secrets.ESPN_S2 }}
+          ESPN_SWID: ${{ secrets.ESPN_SWID }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          WEEK: ${{ github.event.inputs.week }}
+        run: python -m ffman --notify ${WEEK:+--week "$WEEK"}

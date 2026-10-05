@@ -1,0 +1,33 @@
+# ffman config. Read-only: ffman never changes your lineups, it only recommends.
+# Any value can be pulled from an environment variable with "env:NAME".
+
+[settings]
+# Only call a lineup "needs changes" if the best lineup projects at least
+# this many more points than what you have set now.
+min_gain = 0.5
+
+# --- Sleeper: every league for this username is found automatically ---
+[sleeper]
+username = "your_sleeper_username"
+# league_ids = ["1048xxxxxxxxxxxxxxx"]   # optional: only check these
+
+# --- ESPN: add one [[espn]] block per league ---
+# league_id is in the league URL: fantasy.espn.com/football/league?leagueId=123456
+# team_id is in your team URL (...&teamId=3). Private leagues also need the
+# espn_s2 and SWID cookies from your browser (DevTools > Application > Cookies).
+[[espn]]
+name = "Work league"
+league_id = 123456
+team_id = 3
+espn_s2 = "env:ESPN_S2"
+swid = "env:ESPN_SWID"
+
+# [[espn]]
+# name = "Family league"
+# league_id = 654321
+# team_id = 7
+
+# --- Optional notifications (used with `ffman --notify`) ---
+[notify]
+# ntfy_topic = "pick-something-hard-to-guess"   # install the ntfy app and subscribe
+# discord_webhook = "env:DISCORD_WEBHOOK"

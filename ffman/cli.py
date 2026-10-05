@@ -1,0 +1,125 @@
+"""ffman command line: `ffman` (check all leagues) and `ffman init`."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import os
+import sys
+import tomllib
+from pathlib import Path
+
+from . import notify
+from .http import FetchError
+from .providers import espn, sleeper
+from .report import analyze, render
+
+EXAMPLE_CONFIG = Path(__file__).with_name("config.example.toml")
+
+
+def _expand(value):
+    """Let secrets live in env vars: `espn_s2 = "env:ESPN_S2"`."""
+    if isinstance(value, str) and value.startswith("env:"):
+        return os.environ.get(value[4:], "")
+    if isinstance(value, dict):
+        return {k: _expand(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_expand(v) for v in value]
+    return value
+
+
+def load_config(path: str) -> dict:
+    if inline := os.environ.get("FFMAN_CONFIG"):
+        return _expand(tomllib.loads(inline))
+    file = Path(path).expanduser()
+    if not file.exists():
+        sys.exit(f"No config at {file}. Run `ffman init` to create one.")
+    return _expand(tomllib.loads(file.read_text()))
+
+
+def current_season_and_week() -> tuple[int, int | None]:
+    try:
+        state = sleeper.nfl_state()
+        return int(state.get("league_season") or state["season"]), int(state.get("week") or 1)
+    except (FetchError, KeyError, ValueError):
+        today = dt.date.today()
+        return (today.year if today.month >= 8 else today.year - 1), None
+
+
+def collect_teams(config: dict, season: int, week: int | None, only: str | None):
+    teams, errors = [], []
+    if config.get("sleeper"):
+        try:
+            teams += sleeper.fetch_teams(config["sleeper"], season, week or 1)
+        except FetchError as exc:
+            errors.append(f"Sleeper: {exc}")
+    for league in config.get("espn", []):
+        try:
+            teams.append(espn.fetch_team(league, season, week))
+        except FetchError as exc:
+            errors.append(f"ESPN {league.get('name') or league.get('league_id')}: {exc}")
+    if only:
+        teams = [t for t in teams if only.lower() in t.league_name.lower()]
+    return teams, errors
+
+
+def cmd_init(args) -> None:
+    target = Path(args.config).expanduser()
+    if target.exists():
+        sys.exit(f"{target} already exists - edit it directly.")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(EXAMPLE_CONFIG.read_text())
+    print(f"Wrote {target}. Fill in your leagues, then run `ffman`.")
+
+
+def cmd_run(args) -> int:
+    config = load_config(args.config)
+    settings = config.get("settings", {})
+    season, week = current_season_and_week()
+    season = args.season or settings.get("season") or season
+    week = args.week or week
+
+    teams, errors = collect_teams(config, season, week, args.league)
+    reports = [analyze(t, float(settings.get("min_gain", 0.5))) for t in teams]
+    shown_week = week or (teams[0].week if teams else None)
+    text = render(reports, shown_week)
+    if errors:
+        text += "\n## Problems\n" + "\n".join(f"- {e}" for e in errors) + "\n"
+
+    print(text)
+    if args.output:
+        Path(args.output).write_text(text)
+    if summary_file := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(summary_file, "a") as fh:
+            fh.write(text)
+    if args.notify and reports:
+        channels = notify.send(config.get("notify", {}), notify.summary(reports, shown_week))
+        print(f"Notified via: {', '.join(channels) or 'nothing configured'}", file=sys.stderr)
+    return 1 if errors and not teams else 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="ffman",
+        description="Read-only fantasy football lineup advisor. Never changes your lineups.",
+    )
+    parser.add_argument("--config", default=os.environ.get("FFMAN_CONFIG_PATH", "~/.config/ffman/config.toml"))
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("init", help="create a starter config file")
+    run = sub.add_parser("run", help="check every league and recommend lineups (default)")
+    for p, default in ((parser, None), (run, argparse.SUPPRESS)):  # options work before or after `run`
+        p.add_argument("--week", type=int, default=default, help="NFL week (default: current)")
+        p.add_argument("--season", type=int, default=default, help="season year (default: current)")
+        p.add_argument("--league", default=default, help="only leagues whose name contains this text")
+        p.add_argument("--output", default=default, help="also write the report to this file")
+        p.add_argument("--notify", action="store_true", default=default or False,
+                       help="send a summary via ntfy/Discord")
+    args = parser.parse_args(argv)
+    if args.command == "init":
+        cmd_init(args)
+        return 0
+    return cmd_run(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
