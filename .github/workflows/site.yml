@@ -58,7 +58,8 @@ jobs:
         run: |
           # Phone/Discord alerts only on the Thursday and Sunday checks, not every daily rebuild.
           case "${{ github.event.schedule }}" in "0 13 * * *"|"") NOTIFY="" ;; *) NOTIFY="--notify" ;; esac
-          python -m ffman --html _site/index.html $NOTIFY ${WEEK:+--week "$WEEK"}
+          # --quiet: this repo's Actions logs are public, so never print rosters there.
+          python -m ffman --quiet --html _site/index.html $NOTIFY ${WEEK:+--week "$WEEK"}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site

@@ -107,7 +107,8 @@ def cmd_run(args) -> int:
     if errors:
         text += "\n## Problems\n" + "\n".join(f"- {e}" for e in errors) + "\n"
 
-    print(text)
+    if not args.quiet:
+        print(text)
     if args.output:
         Path(args.output).write_text(text)
     if args.html:
@@ -120,13 +121,19 @@ def cmd_run(args) -> int:
             sys.exit("Set both FFMAN_SITE_USER and FFMAN_SITE_PASSWORD to lock the page.")
         Path(args.html).parent.mkdir(parents=True, exist_ok=True)
         Path(args.html).write_text(page)
-        print(f"Wrote {args.html}", file=sys.stderr)
-    if summary_file := os.environ.get("GITHUB_STEP_SUMMARY"):
+        print(f"Wrote {args.html}" + (" (password-protected)" if user and password else ""),
+              file=sys.stderr)
+    # Run summaries are public on public repos; skip them when the site is password-protected.
+    summary_file = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary_file and not args.quiet and not os.environ.get("FFMAN_SITE_PASSWORD"):
         with open(summary_file, "a") as fh:
             fh.write(text)
     if args.notify and reports:
         channels = notify.send(config.get("notify", {}), notify.summary(reports, shown_week))
         print(f"Notified via: {', '.join(channels) or 'nothing configured'}", file=sys.stderr)
+    if args.quiet:
+        print(f"{len(reports)} leagues checked, {sum(r.needs_changes for r in reports)} need changes, "
+              f"{len(errors)} problems.", file=sys.stderr)
     return 1 if errors and not reports else 0
 
 
@@ -156,6 +163,8 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--league", default=default, help="only leagues whose name contains this text")
         p.add_argument("--output", default=default, help="also write the report to this file")
         p.add_argument("--html", default=default, help="also write the dashboard web page to this file")
+        p.add_argument("--quiet", action="store_true", default=default or False,
+                       help="don't print the report (e.g. in public CI logs)")
         p.add_argument("--notify", action="store_true", default=default or False,
                        help="send a summary via ntfy/Discord")
     args = parser.parse_args(argv)
