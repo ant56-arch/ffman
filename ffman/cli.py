@@ -9,7 +9,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-from . import notify, web
+from . import notify, schedule, web
 from .http import FetchError
 from .providers import espn, sleeper
 from .report import analyze, render
@@ -96,8 +96,15 @@ def build_reports(config: dict, args, week: int | None):
     season = args.season or settings.get("season") or season
     week = week or current_week
     teams, errors = collect_teams(config, season, week, args.league)
+    shown_week = week or (teams[0].week if teams else None)
+    if teams and shown_week:
+        # Kickoff times, opponents, byes and game locks for every platform.
+        games, problem = schedule.safe_load_week(season, shown_week)
+        schedule.apply(teams, games, dt.datetime.now(dt.timezone.utc))
+        if problem:
+            errors.append(problem)
     reports = [analyze(t, float(settings.get("min_gain", 0.5))) for t in teams]
-    return reports, week or (teams[0].week if teams else None), errors
+    return reports, shown_week, errors
 
 
 def cmd_run(args) -> int:

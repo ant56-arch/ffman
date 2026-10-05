@@ -2,23 +2,56 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
-from .models import RISKY_STATUSES, Lineup, Player, Team
+from .models import RISKY_STATUSES, Lineup, Player, Team, fmt_time
 from .optimizer import optimal_lineup
+
+CLOSE_CALL = 1.5  # projected points; smaller gains are flagged as toss-ups
+
+
+class Move(NamedTuple):
+    player: Player               # start this player...
+    benched: Player | None       # ...in place of this one (None = empty slot)
+
+    @property
+    def gain(self) -> float:
+        return self.player.effective_projection - (self.benched.effective_projection if self.benched else 0)
+
+    @property
+    def close_call(self) -> bool:
+        return self.gain < CLOSE_CALL
+
+    @property
+    def deadline(self) -> dt.datetime | None:
+        """The move has to be made before either player's game kicks off."""
+        times = [p.kickoff for p in (self.player, self.benched) if p is not None and p.kickoff]
+        return min(times) if times else None
+
+
+class Alert(NamedTuple):
+    level: str        # "bad" = needs a waiver pickup, "warn" = monitor the news
+    text: str
+    player: Player | None = None
+
+    @property
+    def deadline(self) -> dt.datetime | None:
+        return self.player.kickoff if self.player and not self.player.locked else None
 
 
 @dataclass
 class LeagueReport:
     team: Team
     best: Lineup
-    start: list[tuple[Player, Player | None]] = field(default_factory=list)  # (start, in place of)
-    alerts: list[tuple[str, str]] = field(default_factory=list)  # (severity "bad"/"warn", text)
+    start: list[Move] = field(default_factory=list)
+    alerts: list[Alert] = field(default_factory=list)
     min_gain: float = 0.5
 
     @property
     def warnings(self) -> list[str]:
-        return [text for _, text in self.alerts]
+        return [a.text for a in self.alerts]
 
     @property
     def gain(self) -> float:
@@ -37,42 +70,98 @@ def analyze(team: Team, min_gain: float = 0.5) -> LeagueReport:
     ins = [p for p in best.starters if p.id not in current_ids]
     outs = [p for p in team.current.starters if p.id not in best_ids]
     # Pair each new starter with whoever held the same slot, then the rest by projection.
-    start: list[tuple[Player, Player | None]] = []
+    start: list[Move] = []
     for new, old in zip(best.players, team.current.players):
         if new in ins and old in outs:
-            start.append((new, old))
+            start.append(Move(new, old))
             ins.remove(new)
             outs.remove(old)
     ins.sort(key=lambda p: -p.effective_projection)
     outs.sort(key=lambda p: -p.effective_projection)
-    start += [(p, outs[i] if i < len(outs) else None) for i, p in enumerate(ins)]
-    start.sort(key=lambda pair: -pair[0].effective_projection)
+    start += [Move(p, outs[i] if i < len(outs) else None) for i, p in enumerate(ins)]
+    start.sort(key=lambda m: -m.gain)
 
     alerts = []
     for slot, player in zip(best.slots, best.players):
         if player is None:
-            alerts.append(("bad", f"No one on your roster can fill {slot} - grab someone off waivers."))
+            alerts.append(Alert("bad", f"No one on your roster can fill {slot} - grab someone off waivers."))
+        elif player.locked:
+            continue  # game under way; nothing to act on
         elif player.is_out:
-            alerts.append(("bad", f"{player.label()} is {player.status_label} but is your only {slot} option - check waivers."))
+            alerts.append(Alert("bad", f"{player.label()} is {player.status_label} but is your only {slot} option - pick up a {slot}.", player))
         elif player.bye:
-            alerts.append(("bad", f"{player.label()} is on bye and is your best {slot} option - check waivers."))
+            alerts.append(Alert("bad", f"{player.label()} is on bye and is your only {slot} option - pick up a {slot}.", player))
         elif player.effective_projection == 0:
-            alerts.append(("bad", f"{player.label()} is projected 0 (bye week?) and is your best {slot} option - check waivers."))
+            alerts.append(Alert("bad", f"{player.label()} is projected 0 and is your best {slot} option - check waivers.", player))
         elif (player.injury_status or "").upper() in RISKY_STATUSES:
-            alerts.append(("warn", f"{player.label()} is {player.status_label} - check news before kickoff."))
+            when = f" before {fmt_time(player.kickoff)}" if player.kickoff else " before kickoff"
+            alerts.append(Alert("warn", f"{player.label()} is {player.status_label} - check the inactive list{when}.", player))
     return LeagueReport(team, best, start, alerts, min_gain)
+
+
+@dataclass
+class GamePlan:
+    """Everything to do across all leagues, soonest deadline first."""
+
+    moves: list[tuple[LeagueReport, Move]]
+    pickups: list[tuple[LeagueReport, Alert]]
+    watch: list[tuple[LeagueReport, Alert]]
+    all_set: list[LeagueReport]
+
+
+def _soonest(moment: dt.datetime | None) -> tuple:
+    return (moment is None, moment or dt.datetime.max.replace(tzinfo=dt.timezone.utc))
+
+
+def game_plan(reports: list[LeagueReport]) -> GamePlan:
+    moves = [(r, m) for r in reports if r.needs_changes for m in r.start]
+    moves.sort(key=lambda rm: (_soonest(rm[1].deadline), -rm[1].gain))
+    pickups = [(r, a) for r in reports for a in r.alerts if a.level == "bad"]
+    watch = [(r, a) for r in reports for a in r.alerts if a.level == "warn"]
+    watch.sort(key=lambda ra: _soonest(ra[1].deadline))
+    return GamePlan(moves, pickups, watch, [r for r in reports if not r.needs_changes])
+
+
+def deadline_label(moment: dt.datetime | None) -> str:
+    return f"Before {fmt_time(moment)}" if moment else "Any time"
 
 
 def _pts(value: float) -> str:
     return f"{value:.1f}"
 
 
+def _with_game(p: Player) -> str:
+    game = p.game_label()
+    return f"{p.label(True)}{f' ({game})' if game and not p.bye else ''}"
+
+
 def render(reports: list[LeagueReport], week: int | None = None) -> str:
+    plan = game_plan(reports)
     lines = [f"# Lineup recommendations{f' - Week {week}' if week else ''}", ""]
     todo = [r for r in reports if r.needs_changes]
     lines.append(f"**{len(todo)} of {len(reports)} leagues have changes to make.** "
                  "Nothing has been changed for you - these are suggestions only.")
     lines.append("")
+    if plan.moves:
+        lines.append("## Game plan")
+        current = object()
+        for r, m in plan.moves:
+            label = deadline_label(m.deadline)
+            if label != current:
+                lines.append(f"\n**{label}**")
+                current = label
+            lines.append(f"- {r.team.league_name}: START {m.player.name} over "
+                         f"{m.benched.name if m.benched else 'empty slot'} (+{_pts(m.gain)})"
+                         + (" - close call" if m.close_call else ""))
+        lines.append("")
+    if plan.pickups:
+        lines.append("## Waiver pickups needed")
+        lines.extend(f"- {r.team.league_name}: {a.text}" for r, a in plan.pickups)
+        lines.append("")
+    if plan.watch:
+        lines.append("## Watch list")
+        lines.extend(f"- {r.team.league_name}: {a.text}" for r, a in plan.watch)
+        lines.append("")
     for r in sorted(reports, key=lambda r: (not r.needs_changes, -r.gain)):
         lines.extend(render_league(r))
     return "\n".join(lines).rstrip() + "\n"
@@ -84,10 +173,11 @@ def render_league(r: LeagueReport) -> list[str]:
     if r.needs_changes:
         lines.append(f"Projected **{_pts(t.current.total)} -> {_pts(r.best.total)}** "
                      f"(+{_pts(r.gain)}) if you make these moves:")
-        for player, benched in r.start:
-            target = (f"over {benched.label(True)} {_pts(benched.effective_projection)}"
-                      if benched else "into an empty slot")
-            lines.append(f"- START {player.label(True)} {_pts(player.effective_projection)} {target}")
+        for m in r.start:
+            target = (f"over {_with_game(m.benched)} {_pts(m.benched.effective_projection)}"
+                      if m.benched else "into an empty slot")
+            close = " - close call" if m.close_call else ""
+            lines.append(f"- START {_with_game(m.player)} {_pts(m.player.effective_projection)} {target}{close}")
     else:
         lines.append(f"Lineup looks good - projected {_pts(t.current.total)}. No changes needed.")
     if r.warnings:
@@ -96,13 +186,14 @@ def render_league(r: LeagueReport) -> list[str]:
     lines.append("")
     lines.append("<details><summary>Best lineup</summary>")
     lines.append("")
-    lines.append("| Slot | Player | Proj |")
-    lines.append("|---|---|---|")
+    lines.append("| Slot | Player | Game | Proj |")
+    lines.append("|---|---|---|---|")
     for slot, player in zip(r.best.slots, r.best.players):
         if player is None:
-            lines.append(f"| {slot} | (empty) | - |")
+            lines.append(f"| {slot} | (empty) | | - |")
         else:
-            lines.append(f"| {slot} | {player.label(True)} | {_pts(player.effective_projection)} |")
+            lines.append(f"| {slot} | {player.label(True)} | {player.game_label() or ''} | "
+                         f"{_pts(player.effective_projection)} |")
     lines.append("")
     lines.append("</details>")
     lines.append("")

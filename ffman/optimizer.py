@@ -11,6 +11,7 @@ from .models import Lineup, Player, Team
 
 _INELIGIBLE = 1e9
 _EMPTY = 1e6  # leaving a slot empty is only chosen when nobody can fill it
+_LOCKED = 1e7  # pins a started player to the slot they're already in
 # Tiny tie-breakers so equal projections never produce pointless swaps.
 _SAME_SLOT_BONUS = 1e-3
 _STARTER_BONUS = 5e-4
@@ -68,12 +69,20 @@ def optimal_lineup(team: Team) -> Lineup:
     current_slot = {
         p.id: slot for slot, p in zip(team.current.slots, team.current.players) if p
     }
+    # Players whose game has started can't move: starters stay in their exact slot,
+    # bench players stay on the bench. (current.slots is aligned with team.slots.)
+    locked_at = {
+        p.id: i for i, p in enumerate(team.current.players) if p is not None and p.locked
+    }
 
     # One column per player plus one "empty" column per slot.
     cost: list[list[float]] = []
-    for slot in slots:
+    for i, slot in enumerate(slots):
         row = []
         for player in roster:
+            if player.locked:
+                row.append(-_LOCKED if locked_at.get(player.id) == i else _INELIGIBLE)
+                continue
             if slot not in player.eligible:
                 row.append(_INELIGIBLE)
                 continue

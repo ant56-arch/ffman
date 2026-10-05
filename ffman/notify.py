@@ -6,22 +6,30 @@ import json
 import urllib.request
 
 from .http import USER_AGENT
-from .report import LeagueReport
+from .report import LeagueReport, deadline_label, game_plan
 
 
 def summary(reports: list[LeagueReport], week: int | None) -> str:
-    todo = [r for r in reports if r.needs_changes]
+    plan = game_plan(reports)
     head = f"Week {week}: " if week else ""
-    if not todo:
+    if not plan.moves and not plan.pickups and not plan.watch:
         return f"{head}all {len(reports)} lineups look good."
-    lines = [f"{head}{len(todo)} of {len(reports)} leagues need changes"]
-    for r in todo:
-        lines.append(f"\n{r.team.league_name} (+{r.gain:.1f}):")
-        for player, benched in r.start:
-            lines.append(f"  Start {player.name}" + (f" over {benched.name}" if benched else ""))
-    warnings = [w for r in reports for w in r.warnings]
-    if warnings:
-        lines.append(f"\n{len(warnings)} injury/bye warnings - see full report.")
+    lines = [f"{head}{len({id(r) for r, _ in plan.moves})} of {len(reports)} leagues need changes"]
+    current = None
+    for r, m in plan.moves:
+        label = deadline_label(m.deadline)
+        if label != current:
+            lines.append(f"\n{label}:")
+            current = label
+        over = f" over {m.benched.name}" if m.benched else ""
+        close = " (close call)" if m.close_call else ""
+        lines.append(f"  {r.team.league_name}: start {m.player.name}{over} +{m.gain:.1f}{close}")
+    if plan.pickups:
+        lines.append("\nPickups needed:")
+        lines.extend(f"  {r.team.league_name}: {a.text}" for r, a in plan.pickups)
+    if plan.watch:
+        lines.append("\nWatch:")
+        lines.extend(f"  {r.team.league_name}: {a.text}" for r, a in plan.watch)
     return "\n".join(lines)
 
 

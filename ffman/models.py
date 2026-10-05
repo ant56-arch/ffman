@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import dataclass, field
 
 # Which player positions may fill each (normalized) starting slot.
@@ -32,6 +33,12 @@ def eligible_slots(positions: set[str]) -> set[str]:
     return {slot for slot, allowed in SLOT_POSITIONS.items() if positions & allowed}
 
 
+def fmt_time(moment: dt.datetime) -> str:
+    """'Sun 1:00 PM' in the local time zone (TZ env var; the website uses Eastern)."""
+    local = moment.astimezone()
+    return f"{local:%a} {local.hour % 12 or 12}:{local:%M} {local:%p}"
+
+
 @dataclass
 class Player:
     id: str
@@ -42,6 +49,11 @@ class Player:
     projection: float = 0.0
     injury_status: str | None = None
     bye: bool = False
+    # Filled in from the NFL schedule (see schedule.py).
+    kickoff: dt.datetime | None = None
+    opponent: str | None = None
+    home: bool = True
+    locked: bool = False  # game already started: can't be moved
 
     @property
     def is_out(self) -> bool:
@@ -58,6 +70,22 @@ class Player:
     def status_label(self) -> str | None:
         status = (self.injury_status or "").replace("_", " ")
         return (status.upper() if len(status) <= 3 else status.title()) or None
+
+    @property
+    def matchup(self) -> str | None:
+        """'vs DAL' / '@ DAL', or None if unknown."""
+        if self.bye or not self.opponent:
+            return None
+        return f"{'vs' if self.home else '@'} {self.opponent}"
+
+    def game_label(self) -> str | None:
+        """'vs DAL, Sun 1:00 PM' / 'BYE' / None."""
+        if self.bye:
+            return "BYE"
+        if not self.kickoff:
+            return None
+        when = "in progress/final" if self.locked else fmt_time(self.kickoff)
+        return f"{self.matchup}, {when}"
 
     def label(self, with_status: bool = False) -> str:
         team = f", {self.team}" if self.team else ""

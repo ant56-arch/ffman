@@ -3,11 +3,18 @@
 name: Website
 
 on:
+  # Times are UTC (ET + 4 during daylight time, ET + 5 from November). Odd minutes because
+  # GitHub delays jobs scheduled on the hour. Every run rebuilds the site with fresh data.
   schedule:
-    - cron: "0 13 * * *"    # every morning ~9am ET (picks up the new week, waiver moves)
-    - cron: "0 22 * * 4"    # Thursday ~6pm ET, before Thursday Night Football
-    - cron: "45 15 * * 0"   # Sunday ~11:45am ET, after inactives are announced
-    - cron: "45 18 * * 0"   # Sunday ~2:45pm ET, before the late games
+    - cron: "7 13 * * *"              # every morning, ~9am ET: new week, waiver results
+    - cron: "7,37 20-23 * * 4"        # Thursday ~4-7:30pm ET, through TNF inactives
+    - cron: "7,37 13-23 * * 0"        # Sunday every 30 min, ~9am-7:30pm ET: all inactives
+    - cron: "7 0 * * 1"               # Sunday ~8pm ET, before Sunday Night Football
+    - cron: "7,37 20-23 * * 1"        # Monday ~4-7:30pm ET, through MNF inactives
+    # Phone/Discord alerts go out only on these three runs (if configured):
+    - cron: "50 21 * * 4"             # Thursday ~5:50pm ET
+    - cron: "50 15 * * 0"             # Sunday ~11:50am ET, after early inactives
+    - cron: "50 18 * * 0"             # Sunday ~2:50pm ET, after late inactives
   workflow_dispatch:
     inputs:
       week:
@@ -57,8 +64,7 @@ jobs:
           WEEK: ${{ github.event.inputs.week }}
           TZ: America/New_York
         run: |
-          # Phone/Discord alerts only on the Thursday and Sunday checks, not every daily rebuild.
-          case "${{ github.event.schedule }}" in "0 13 * * *"|"") NOTIFY="" ;; *) NOTIFY="--notify" ;; esac
+          case "${{ github.event.schedule }}" in "50 21 * * 4"|"50 15 * * 0"|"50 18 * * 0") NOTIFY="--notify" ;; *) NOTIFY="" ;; esac
           # --quiet: this repo's Actions logs are public, so never print rosters there.
           python -m ffman --quiet --html _site/index.html $NOTIFY ${WEEK:+--week "$WEEK"}
       - uses: actions/upload-pages-artifact@v3

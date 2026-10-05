@@ -11,8 +11,11 @@ For each league it:
 3. Works out the best possible legal lineup. This handles FLEX, SUPERFLEX, WR/TE and RB/WR
    flex slots and IDP. Players listed **Out**/IR count as 0 points and **Doubtful** players
    are discounted.
-4. Tells you what to change and flags anything to watch, such as Questionable starters,
-   starters projected for 0 (bye weeks) and slots nobody on your roster can fill.
+4. Pulls kickoff times, opponents and byes from ESPN's NFL schedule. Players whose game
+   has already started are **locked**: ffman never suggests moving them.
+5. Opens with a **game plan**: every move across all your leagues, sorted by deadline
+   ("Before Thu 8:15 PM ..."). Moves worth less than 1.5 points are marked "close call".
+   Waiver pickups you need and Questionable starters to watch are listed separately.
 
 Supported: **Sleeper** (finds every league for your username) and **ESPN** (public or private leagues).
 
@@ -89,8 +92,9 @@ telling you about. It stops coin-flip swaps from cluttering the report.
 ## GitHub website
 
 GitHub can host the dashboard for free at `https://<your-username>.github.io/ffman/` and keep
-it fresh. The `Website` workflow rebuilds it every morning, on Thursday before TNF, and twice
-on Sunday (after inactives and before the late games).
+it fresh. The `Website` workflow rebuilds it every morning, every 30 minutes on Sunday from
+about 9am to 7:30pm ET, and every 30 minutes before Thursday and Monday night games. That
+way inactives and late injury news show up before each kickoff.
 
 One-time setup:
 
@@ -116,7 +120,7 @@ A long passphrase of four or more random words is plenty.
 To lock a page you build yourself, set `FFMAN_SITE_USER` and `FFMAN_SITE_PASSWORD` before
 running `ffman --html ...` (requires `pip install cryptography`).
 
-For phone alerts on the Thursday and Sunday runs, install the free [ntfy](https://ntfy.sh)
+For phone alerts (Thursday ~5:50pm, Sunday ~11:50am and ~2:50pm ET), install the free [ntfy](https://ntfy.sh)
 app, subscribe to a topic name that's hard to guess, and set `ntfy_topic` under `[notify]`.
 For Discord, add a `DISCORD_WEBHOOK` secret and set `discord_webhook = "env:DISCORD_WEBHOOK"`.
 

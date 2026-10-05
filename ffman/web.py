@@ -12,8 +12,8 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .models import RISKY_STATUSES, Player
-from .report import LeagueReport
+from .models import RISKY_STATUSES, Player, fmt_time
+from .report import LeagueReport, deadline_label, game_plan
 
 POSITION_CLASS = {"QB": "qb", "RB": "rb", "WR": "wr", "TE": "te", "K": "k", "DEF": "def"}
 SLOT_LABEL = {"SUPER_FLEX": "SFLX", "REC_FLEX": "W/T", "WRRB_FLEX": "W/R", "IDP_FLEX": "IDP"}
@@ -69,12 +69,6 @@ h1 span { color: var(--turf); }
 .stat small { color: var(--muted); text-transform: uppercase; letter-spacing: .08em; font-size: 11px;
   font-weight: 700; }
 .note { color: var(--muted); font-size: 13px; margin: 0; }
-.jump { display: flex; flex-wrap: wrap; gap: 6px; }
-.jump a { text-decoration: none; color: var(--ink); font-size: 13px; padding: 4px 10px;
-  border-radius: 999px; border: 1px solid var(--line); background: var(--surface); }
-.jump a .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px;
-  background: var(--turf); vertical-align: 1px; }
-.jump a.todo .dot { background: var(--warn); }
 .league { background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
   padding: 18px; display: grid; gap: 14px; min-width: 0; }
 .league.todo { border-top: 4px solid var(--warn); }
@@ -129,6 +123,31 @@ tr.new td { background: var(--turf-soft); }
 .problems h2 { font: 800 18px var(--display); text-transform: uppercase; margin: 0 0 4px; color: var(--bad); }
 .problems ul { margin: 0; padding-left: 18px; }
 footer { color: var(--muted); font-size: 12px; }
+.game { display: block; font: 500 12px var(--mono); color: var(--muted); margin-top: 1px; }
+.flag.lock { background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
+.flag.close { background: var(--bg); color: var(--muted); border: 1px dashed var(--line); }
+.plan { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px;
+  display: grid; gap: 14px; min-width: 0; }
+.plan h2 { font: 800 24px/1 var(--display); text-transform: uppercase; margin: 0; letter-spacing: .01em; }
+.plan h3 { font: 800 15px var(--display); text-transform: uppercase; letter-spacing: .06em; margin: 0;
+  color: var(--warn); display: flex; align-items: center; gap: 8px; }
+.plan h3.calm { color: var(--muted); }
+.plan h3::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.plan ol, .plan ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.pitem { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: baseline;
+  padding: 9px 12px; border-radius: 8px; background: var(--bg); }
+.pitem .what { min-width: 0; overflow-wrap: anywhere; }
+.pitem .what b { font-weight: 700; }
+.pitem .league-link { font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+  color: var(--muted); text-decoration: none; display: block; }
+.pitem .league-link:hover { color: var(--turf); }
+.pitem .delta { font: 700 14px var(--mono); color: var(--turf); white-space: nowrap; }
+.pitem.bad { background: var(--bad-soft); }
+.pitem.warn { background: var(--warn-soft); }
+.allset { color: var(--muted); font-size: 14px; margin: 0; }
+.allset b { color: var(--turf); }
+.section-label { font: 800 15px var(--display); text-transform: uppercase; letter-spacing: .06em;
+  color: var(--muted); margin: 6px 0 -8px; }
 .lockbtn { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 6px; cursor: pointer;
   border: 1px solid var(--line); background: var(--surface); color: var(--muted); }
 @media (max-width: 560px) {
@@ -161,9 +180,18 @@ def _flag(player: Player) -> str:
     return ""
 
 
-def _player_cell(player: Player) -> str:
+def _game(player: Player) -> str:
+    if player.bye or not player.kickoff:
+        return ""
+    when = "game under way" if player.locked else fmt_time(player.kickoff)
+    return f'<span class="game">{_e(player.matchup)} &middot; {_e(when)}</span>'
+
+
+def _player_cell(player: Player, game: bool = True) -> str:
     team = f' <span class="proj">{_e(player.team)}</span>' if player.team else ""
-    return f'{_pos(player)}<span class="name">{_e(player.name)}</span>{team}{_flag(player)}'
+    lock = '<span class="flag lock">LOCKED</span>' if player.locked else ""
+    return (f'{_pos(player)}<span class="name">{_e(player.name)}</span>{team}{_flag(player)}{lock}'
+            + (_game(player) if game else ""))
 
 
 def _when(moment: dt.datetime) -> str:
@@ -196,8 +224,9 @@ def _league(r: LeagueReport, anchor: str) -> str:
             f'<i class="add" style="width:{best / scale * 100:.1f}%"></i>'
             f'<i style="width:{now / scale * 100:.1f}%"></i></div>')
         parts.append('<ul class="moves">')
-        for player, benched in r.start:
-            delta = player.effective_projection - (benched.effective_projection if benched else 0)
+        for m in r.start:
+            player, benched = m
+            close = '<span class="flag close">close call</span>' if m.close_call else ""
             out = (f'<span class="tag">SIT</span><span>{_player_cell(benched)}</span>'
                    f'<span class="proj">{benched.effective_projection:.1f} proj</span>'
                    if benched else '<span class="tag">FILLS</span><span class="name">Empty slot</span>')
@@ -207,7 +236,7 @@ def _league(r: LeagueReport, anchor: str) -> str:
                 f'<span class="proj">{player.effective_projection:.1f} proj</span></div>'
                 '<span class="arrow">over</span>'
                 f'<div class="out">{out}</div>'
-                f'<span class="delta">+{delta:.1f}</span></li>')
+                f'<span class="delta">+{m.gain:.1f}{close}</span></li>')
         parts.append('</ul>')
     else:
         parts.append(f'<div class="score"><span class="best">{now:.1f}</span>'
@@ -216,9 +245,9 @@ def _league(r: LeagueReport, anchor: str) -> str:
 
     if r.alerts:
         parts.append('<ul class="alerts">' + "".join(
-            f'<li class="{level}">{_e(text)}</li>' for level, text in r.alerts) + '</ul>')
+            f'<li class="{a.level}">{_e(a.text)}</li>' for a in r.alerts) + '</ul>')
 
-    new_ids = {p.id for p, _ in r.start}
+    new_ids = {m.player.id for m in r.start}
     rows = []
     for slot, player in zip(r.best.slots, r.best.players):
         label = SLOT_LABEL.get(slot, slot)
@@ -231,6 +260,48 @@ def _league(r: LeagueReport, anchor: str) -> str:
     parts.append('<details><summary>Best lineup</summary><div class="tablewrap"><table>'
                  + "".join(rows) + '</table></div></details>')
     parts.append('</section>')
+    return "".join(parts)
+
+
+def _plan(reports: list[LeagueReport], anchors: dict[int, str]) -> str:
+    """The manager's brief: every move across leagues, soonest deadline first."""
+    plan = game_plan(reports)
+    link = lambda r: (f'<a class="league-link" href="#{anchors[id(r)]}">'  # noqa: E731
+                      f'{_e(r.team.league_name)} &middot; {_e(r.team.platform)}</a>')
+    parts = ['<section class="plan" aria-labelledby="plan-h"><h2 id="plan-h">Game plan</h2>']
+    if not plan.moves and not plan.pickups:
+        parts.append('<p class="good">Every lineup is already set. Nothing to do right now.</p>')
+    current = None
+    for r, m in plan.moves:
+        label = deadline_label(m.deadline)
+        if label != current:
+            if current is not None:
+                parts.append("</ol>")
+            parts.append(f"<h3>{_e(label)}</h3><ol>")
+            current = label
+        over = (f' over {_e(m.benched.name)}{" (BYE)" if m.benched.bye else ""}'
+                f'{" (" + _e(m.benched.status_label) + ")" if m.benched.status_label and not m.benched.bye else ""}'
+                if m.benched else " into the empty slot")
+        game = f' <span class="game">{_e(m.player.matchup or "")} &middot; {_e(fmt_time(m.player.kickoff))}</span>' \
+            if m.player.kickoff else ""
+        close = '<span class="flag close">close call</span>' if m.close_call else ""
+        parts.append(f'<li class="pitem"><div class="what">{link(r)}Start <b>{_e(m.player.name)}</b> '
+                     f'({_e(m.player.position)}){over}{game}</div>'
+                     f'<span class="delta">+{m.gain:.1f}{close}</span></li>')
+    if current is not None:
+        parts.append("</ol>")
+    if plan.pickups:
+        parts.append('<h3>Waiver pickups needed</h3><ul>' + "".join(
+            f'<li class="pitem bad"><div class="what">{link(r)}{_e(a.text)}</div></li>'
+            for r, a in plan.pickups) + "</ul>")
+    if plan.watch:
+        parts.append('<h3 class="calm">Watch list</h3><ul>' + "".join(
+            f'<li class="pitem warn"><div class="what">{link(r)}{_e(a.text)}</div></li>'
+            for r, a in plan.watch) + "</ul>")
+    if plan.all_set:
+        names = ", ".join(_e(r.team.league_name) for r in plan.all_set)
+        parts.append(f'<p class="allset"><b>All set:</b> {names}</p>')
+    parts.append("</section>")
     return "".join(parts)
 
 
@@ -249,11 +320,13 @@ def render_dashboard(reports: list[LeagueReport], week: int | None, errors: list
     ordered = sorted(reports, key=lambda r: (not r.needs_changes, -r.gain))
     todo = [r for r in ordered if r.needs_changes]
     gain = sum(r.gain for r in todo)
-    alerts = sum(len(r.warnings) for r in ordered)
+    moves = sum(len(r.start) for r in todo)
+    pickups = sum(1 for r in ordered for a in r.alerts if a.level == "bad")
+    locked = any(p.locked for r in ordered for p in r.team.roster)
 
     out = ["<title>ffman Lineups</title>", STYLE, '<main class="wrap">', "<header><div>",
            f'<h1>Lineups <span>Week {week}</span></h1>' if week else "<h1>Lineups</h1>",
-           f'<div class="meta">Updated {_e(_when(generated))}</div></div>']
+           f'<div class="meta">Projections, injuries and rosters as of {_e(_when(generated))}</div></div>']
     if week_picker:
         options = "".join(f'<option value="{w}"{" selected" if w == week else ""}>Week {w}</option>'
                           for w in range(1, 19))
@@ -266,24 +339,26 @@ def render_dashboard(reports: list[LeagueReport], week: int | None, errors: list
 
     out.append('<div class="strip">'
                f'<div class="stat"><small>Leagues</small><b>{len(ordered)}</b></div>'
-               f'<div class="stat"><small>Need changes</small><b>{len(todo)}</b></div>'
+               f'<div class="stat"><small>Moves to make</small><b>{moves}</b></div>'
                f'<div class="stat"><small>Points to gain</small><b>+{gain:.1f}</b></div>'
-               f'<div class="stat"><small>Heads-ups</small><b>{alerts}</b></div></div>')
-    out.append('<p class="note">Suggestions only. Nothing has been changed in any of your leagues.</p>')
+               f'<div class="stat"><small>Pickups needed</small><b>{pickups}</b></div></div>')
+    note = "Suggestions only. Nothing has been changed in any of your leagues."
+    if locked:
+        note += " Players whose games have started are locked and left where they are."
+    out.append(f'<p class="note">{note}</p>')
 
     anchors = [_slug(r.team.league_name, i) for i, r in enumerate(ordered)]
-    if len(ordered) > 1:
-        out.append('<nav class="jump" aria-label="Leagues">' + "".join(
-            f'<a href="#{a}" class="{"todo" if r.needs_changes else ""}"><span class="dot"></span>'
-            f'{_e(r.team.league_name)}</a>' for r, a in zip(ordered, anchors)) + "</nav>")
-
     if errors:
         out.append('<div class="problems"><h2>Couldn\'t load</h2><ul>'
                    + "".join(f"<li>{_e(e)}</li>" for e in errors) + "</ul></div>")
+    if ordered:
+        out.append(_plan(ordered, {id(r): a for r, a in zip(ordered, anchors)}))
+        out.append('<h2 class="section-label">League by league</h2>')
     out.extend(_league(r, a) for r, a in zip(ordered, anchors))
     if not ordered and not errors:
         out.append('<p class="note">No leagues found. Check your config.</p>')
     out.append('<footer>Projections: Sleeper (scored with each league\'s settings) and ESPN. '
+               f'Game times: ESPN NFL schedule, shown in {_e(generated.strftime("%Z") or "local time")}. '
                'Check injury news before kickoff.</footer></main>')
     return "\n".join(out)
 

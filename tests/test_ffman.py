@@ -75,6 +75,64 @@ class ReportTests(unittest.TestCase):
         self.assertIn("No changes needed", render([report]))
 
 
+class ScheduleTests(unittest.TestCase):
+    def test_load_week_and_locks(self):
+        import datetime as dt
+        from ffman import schedule
+        kick = int(dt.datetime(2026, 10, 11, 17, 0, tzinfo=dt.timezone.utc).timestamp() * 1000)
+        data = {"settings": {"proTeams": [
+            {"id": 0, "abbrev": "FA"},
+            {"id": 12, "abbrev": "KC", "proGamesByScoringPeriod": {}},
+            {"id": 28, "abbrev": "WSH", "proGamesByScoringPeriod": {
+                "5": [{"date": kick, "homeProTeamId": 28, "awayProTeamId": 6}]}},
+            {"id": 6, "abbrev": "DAL", "proGamesByScoringPeriod": {
+                "5": [{"date": kick, "homeProTeamId": 28, "awayProTeamId": 6}]}},
+        ]}}
+        with unittest.mock.patch.object(schedule, "get_json", return_value=data):
+            games = schedule.load_week(2026, 5)
+        self.assertIsNone(games["KC"])
+        self.assertEqual((games["WAS"].opponent, games["WAS"].home), ("DAL", True))
+        self.assertEqual((games["DAL"].opponent, games["DAL"].home), ("WAS", False))
+
+        wr, chiefs = player("w", "WR", 10), player("k", "DEF", 5)
+        wr.team, chiefs.team = "WSH", "KC"
+        before = dt.datetime(2026, 10, 11, 16, 0, tzinfo=dt.timezone.utc)
+        schedule.annotate(wr, games, before)
+        schedule.annotate(chiefs, games, before)
+        self.assertEqual(wr.team, "WAS")
+        self.assertEqual(wr.matchup, "vs DAL")
+        self.assertFalse(wr.locked)
+        self.assertTrue(chiefs.bye)
+        schedule.annotate(wr, games, before + dt.timedelta(hours=2))
+        self.assertTrue(wr.locked)
+
+
+class LockAndPlanTests(unittest.TestCase):
+    def test_locked_players_stay_put(self):
+        a, b, c = player("a", "WR", 5), player("b", "WR", 20), player("c", "WR", 12)
+        a.locked = True   # started, in the lineup: must stay
+        b.locked = True   # started, on the bench: can't come in
+        best = optimal_lineup(team(["WR", "WR"], [a, b, c], ["a", None]))
+        self.assertEqual([p.id for p in best.players], ["a", "c"])
+
+    def test_game_plan_sorted_by_deadline_with_close_calls(self):
+        import datetime as dt
+        from ffman.report import game_plan
+        thu = dt.datetime(2026, 10, 8, 0, 15, tzinfo=dt.timezone.utc)
+        sun = dt.datetime(2026, 10, 11, 17, 0, tzinfo=dt.timezone.utc)
+        p1, p2 = player("s1", "RB", 15), player("b1", "RB", 5)
+        p1.kickoff, p2.kickoff = sun, sun
+        q1, q2 = player("s2", "WR", 10), player("b2", "WR", 9)
+        q1.kickoff, q2.kickoff = sun, thu  # benching a Thursday player has a Thursday deadline
+        r1 = analyze(team(["RB"], [p1, p2], ["b1"]))
+        r2 = analyze(team(["WR"], [q1, q2], ["b2"]))
+        plan = game_plan([r1, r2])
+        self.assertEqual([m.player.id for _, m in plan.moves], ["s2", "s1"])
+        self.assertEqual(plan.moves[0][1].deadline, thu)
+        self.assertTrue(plan.moves[0][1].close_call)
+        self.assertFalse(plan.moves[1][1].close_call)
+
+
 class WeekTests(unittest.TestCase):
     def test_week_rolls_over_on_tuesday(self):
         import datetime as dt
