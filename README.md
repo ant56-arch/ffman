@@ -79,9 +79,13 @@ ffman --notify           # also send a summary to your phone or Discord
 
 ## The website
 
-ffman also has a dashboard page. It shows every league as a card, with leagues that need
-moves listed first. Each card shows START/SIT pairs and the points each move gains, flags for
-bye weeks and injuries, and the full best lineup.
+ffman also has a dashboard page, laid out like a printed lineup card. It opens with one
+sentence saying what needs doing, then a to-do list of every move across your leagues sorted
+by deadline (tick them off as you go; the checkmarks stay on your device for the week), then
+pickups needed, players to watch and waiver ideas. Each league gets its full best lineup with
+new starters marked **IN**, who they replace, and a small bar showing how far apart the
+projection sources are (hover or tap it for every source's number). Light and dark themes
+follow your device, or pick one with the Theme button. A bar at the top jumps to any league.
 
 ```bash
 ffman serve                    # open http://127.0.0.1:8000
