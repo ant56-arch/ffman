@@ -8,6 +8,9 @@ For each league it:
 1. Pulls your roster, the league's lineup slots and its scoring settings.
 2. Gets this week's projections. On Sleeper these are scored with *your league's* rules
    (PPR, TE premium and so on). On ESPN it uses ESPN's own league-scored projections.
+   Then it **averages in up to 7 free sources**: ESPN's public projections, Draft Sharks,
+   CBS Sports, Fantasy Football Calculator, FantasyData, FFToday and StartWho (see
+   [Projection sources](#projection-sources)). No accounts or keys needed.
 3. Works out the best possible legal lineup. This handles FLEX, SUPERFLEX, WR/TE and RB/WR
    flex slots and IDP. Players listed **Out**/IR count as 0 points and **Doubtful** players
    are discounted.
@@ -89,6 +92,40 @@ ffman --html lineups.html      # save a one-off copy of the page instead
 `ffman serve` pulls fresh data when you load the page. It reuses results for up to 5 minutes
 so refreshing doesn't flood the APIs. The week picker in the top corner switches weeks.
 
+### Projection sources
+
+Every source is free and needs no sign-up. ffman reads each site's public weekly projection
+page (StartWho and ESPN publish theirs as data), the same pages you'd see in a browser:
+
+| Source | What it adds |
+|---|---|
+| ESPN (public) | ESPN's projection for every player, so Sleeper leagues get it too |
+| Draft Sharks | Expert median projections |
+| CBS Sports | Full projected stat lines |
+| Fantasy Football Calculator | Weekly PPR projections (tends to run high on QBs) |
+| FantasyData | Weekly PPR rankings and projections |
+| FFToday | Weekly projections, usually posted midweek |
+| StartWho | Projections built from sportsbook player props |
+
+How the numbers are combined:
+
+- The sites publish plain PPR. Your platform's projection says how far *your* scoring
+  (6-point passing TDs, TE premium, half PPR and so on) moves each player from plain PPR,
+  and every site's number is shifted by that amount first.
+- The platform's number and the shifted site numbers are averaged. With 5 or more, the single
+  highest and lowest are dropped so one outlier can't swing a decision.
+- If your platform projects a player at 0 (usually injury news) ffman keeps the 0, but says
+  what the other sources think. Starters whose sources are 10+ points apart get a
+  "check the news" alert.
+- The website shows each player's low-high range and, on hover, every source's number.
+- A site that's down, blocks the request or still shows last week is skipped and listed in
+  the footer. The rest still work.
+- Site data is cached (on GitHub, between workflow runs) and re-read every 12 hours, with a
+  failed site retried every 2 hours. Injuries, rosters and game locks still refresh on every run.
+
+Turn it off or pick sources with `[projections]` in your config (see `config.example.toml`).
+It's on by default, so the GitHub website picks it up without changing your `FFMAN_CONFIG` secret.
+
 ### Tuning
 
 `min_gain` under `[settings]` (default 0.5) is the smallest projected improvement worth
@@ -137,6 +174,9 @@ For Discord, add a `DISCORD_WEBHOOK` secret and set `discord_webhook = "env:DISC
 - Sleeper's projections endpoint is public but undocumented, so it could change. (Verified against live data for the 2026 season: scoring matches Sleeper's own PPR totals within rounding.)
 - ESPN cookies expire every few months. If a private league starts failing, copy fresh ones.
 - Yahoo isn't supported yet because it requires registering an OAuth app.
+- The projection sites can change their pages or block automated visits at any time. When
+  that happens the site is skipped (listed under "Skipped" in the footer) until its parser
+  is updated. Use them for personal lineup decisions, not republishing.
 
 ## Development
 

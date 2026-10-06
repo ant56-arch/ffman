@@ -60,6 +60,18 @@ class Player:
     owned_pct: float | None = None     # % of leagues where the player is rostered
     trending: int | None = None        # adds in the last 24 hours (Sleeper)
     waiver_status: str | None = None   # "Free agent" / "On waivers", when known
+    # Multi-source projections (see consensus.py).
+    ppr_projection: float | None = None   # the platform's projection in plain PPR scoring
+    platform_projection: float | None = None  # the platform's own number, before averaging
+    sources: dict[str, float] = field(default_factory=dict)  # source -> points, league-adjusted
+
+    @property
+    def source_range(self) -> tuple[float, float] | None:
+        """(low, high) across every projection behind this player's number."""
+        values = list(self.sources.values())
+        if self.platform_projection is not None:
+            values.append(self.platform_projection)
+        return (min(values), max(values)) if len(values) > 1 else None
 
     @property
     def is_out(self) -> bool:
@@ -137,3 +149,4 @@ class Team:
     free_agents: list[Player] = field(default_factory=list)
     waiver_note: str | None = None     # e.g. "FAAB: $72 of $100 left"
     long_term: bool = False            # keeper/dynasty league: be careful dropping players
+    sources_used: list[str] = field(default_factory=list)  # projection sources averaged in
