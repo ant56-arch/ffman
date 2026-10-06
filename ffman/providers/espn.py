@@ -7,10 +7,11 @@ are ESPN's own, already scored with the league's settings.
 
 from __future__ import annotations
 
+import json
 import os
 
 from ..http import FetchError, get_json
-from ..models import Lineup, Player, Team
+from ..models import SLOT_POSITIONS, Lineup, Player, Team
 
 BASE = "https://lm-api-reads.fantasy.espn.com/apis/v3/games/ffl"
 
@@ -45,14 +46,16 @@ def cookies_for(config: dict) -> dict:
     }
 
 
-def fetch_league(config: dict, season: int, week: int | None) -> dict:
-    params: dict = {"view": ["mTeam", "mRoster", "mSettings"]}
+def fetch_league(config: dict, season: int, week: int | None,
+                 views: tuple[str, ...] = ("mTeam", "mRoster", "mSettings"),
+                 headers: dict | None = None) -> dict:
+    params: dict = {"view": list(views)}
     if week:
         params["scoringPeriodId"] = week
     cookies = cookies_for(config)
     url = f"{BASE}/seasons/{season}/segments/0/leagues/{config['league_id']}"
     try:
-        return get_json(url, params=params, cookies=cookies)
+        return get_json(url, params=params, cookies=cookies, headers=headers)
     except FetchError as exc:
         if "HTTP 401" in str(exc) or "HTTP 403" in str(exc):
             raise FetchError(
@@ -71,8 +74,13 @@ def _projection(player: dict, week: int) -> float:
 
 def _player(entry: dict, week: int) -> Player:
     pool = entry.get("playerPoolEntry") or {}
-    info = pool.get("player") or {}
+    return _from_info(pool.get("player") or {}, week, entry)
+
+
+def _from_info(info: dict, week: int, entry: dict | None = None) -> Player:
+    entry = entry or {}
     status = info.get("injuryStatus") or entry.get("injuryStatus")
+    owned = (info.get("ownership") or {}).get("percentOwned")
     return Player(
         id=str(info.get("id", entry.get("playerId"))),
         name=info.get("fullName", "Unknown"),
@@ -81,6 +89,7 @@ def _player(entry: dict, week: int) -> Player:
         eligible={SLOTS[s] for s in info.get("eligibleSlots") or [] if s in SLOTS},
         projection=_projection(info, week),
         injury_status=None if status in (None, "ACTIVE", "NORMAL") else status,
+        owned_pct=round(float(owned), 1) if owned is not None else None,
     )
 
 
@@ -129,7 +138,53 @@ def build_team(data: dict, config: dict, week: int) -> Team:
     )
 
 
+# ESPN lineup slot ids to ask for in the free-agent pool, per normalized slot.
+POOL_SLOT_IDS = {"QB": 0, "RB": 2, "WR": 4, "TE": 6, "DEF": 16, "K": 17,
+                 "DL": 11, "LB": 10, "DB": 14}
+
+
+def fetch_free_agents(config: dict, season: int, week: int, slots: list[str]) -> list[Player]:
+    """Most-rostered available players (free agents and waivers) with this week's projection."""
+    wanted = {POOL_SLOT_IDS[pos] for slot in slots for pos in SLOT_POSITIONS.get(slot, ())
+              if pos in POOL_SLOT_IDS}
+    flt = {"players": {
+        "filterStatus": {"value": ["FREEAGENT", "WAIVERS"]},
+        "filterSlotIds": {"value": sorted(wanted)},
+        "sortPercOwned": {"sortPriority": 1, "sortAsc": False},
+        "limit": 75,
+    }}
+    data = fetch_league(config, season, week, views=("kona_player_info",),
+                        headers={"X-Fantasy-Filter": json.dumps(flt)})
+    out = []
+    for entry in data.get("players") or []:
+        info = entry.get("player") or {}
+        if not info:
+            continue
+        p = _from_info(info, week)
+        p.waiver_status = {"WAIVERS": "On waivers", "FREEAGENT": "Free agent"}.get(entry.get("status"))
+        out.append(p)
+    return out
+
+
+def _add_waiver_data(team: Team, config: dict, season: int, week: int) -> None:
+    """Free agents plus next-week projections for them and your roster."""
+    team.free_agents = fetch_free_agents(config, season, week, team.slots)
+    if week >= 18:
+        return
+    nxt = {p.id: p.projection for p in fetch_free_agents(config, season, week + 1, team.slots)}
+    roster_next = build_team(fetch_league(config, season, week + 1), config, week + 1)
+    nxt.update({p.id: p.projection for p in roster_next.roster})
+    for p in team.roster + team.free_agents:
+        p.next_projection = nxt.get(p.id, 0.0)
+
+
 def fetch_team(config: dict, season: int, week: int | None) -> Team:
     data = fetch_league(config, season, week)
     week = week or data.get("scoringPeriodId") or 1
-    return build_team(data, config, week)
+    team = build_team(data, config, week)
+    try:
+        _add_waiver_data(team, config, season, week)
+    except (FetchError, KeyError, TypeError, ValueError):
+        team.free_agents = []
+        team.waiver_note = "Waiver suggestions unavailable: ESPN didn't return the free-agent list."
+    return team

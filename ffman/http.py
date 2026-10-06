@@ -17,10 +17,11 @@ class FetchError(RuntimeError):
     pass
 
 
-def get_json(url: str, params: dict | None = None, cookies: dict | None = None, timeout: int = 30):
+def get_json(url: str, params: dict | None = None, cookies: dict | None = None, timeout: int = 30,
+             headers: dict | None = None):
     if params:
         url += ("&" if "?" in url else "?") + urllib.parse.urlencode(params, doseq=True)
-    headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/json", **(headers or {})}
     if cookies:
         headers["Cookie"] = "; ".join(f"{k}={v}" for k, v in cookies.items() if v)
     request = urllib.request.Request(url, headers=headers, method="GET")

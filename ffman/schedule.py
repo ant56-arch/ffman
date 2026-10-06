@@ -59,7 +59,7 @@ def load_week(season: int, week: int) -> dict[str, Game | None]:
 def apply(teams: list[Team], games: dict[str, Game | None], now: dt.datetime) -> None:
     """Attach kickoff/opponent/bye/locked to every rostered player."""
     for team in teams:
-        for player in team.roster:
+        for player in team.roster + team.free_agents:
             annotate(player, games, now)
 
 

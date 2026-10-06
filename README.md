@@ -16,6 +16,11 @@ For each league it:
 5. Opens with a **game plan**: every move across all your leagues, sorted by deadline
    ("Before Thu 8:15 PM ..."). Moves worth less than 1.5 points are marked "close call".
    Waiver pickups you need and Questionable starters to watch are listed separately.
+6. Suggests **waiver pickups**: up to 3 add/drop moves per league, judged on this week's
+   and next week's projections. It never suggests dropping highly ranked players (stricter
+   in keeper/dynasty leagues) and never leaves a required position empty. A hot pickup is
+   only suggested as a drop for a big gain, and those are labeled "tough call". Each
+   suggestion shows trending adds or % rostered, plus your FAAB budget or waiver priority.
 
 Supported: **Sleeper** (finds every league for your username) and **ESPN** (public or private leagues).
 
@@ -92,9 +97,11 @@ telling you about. It stops coin-flip swaps from cluttering the report.
 ## GitHub website
 
 GitHub can host the dashboard for free at `https://<your-username>.github.io/ffman/` and keep
-it fresh. The `Website` workflow rebuilds it every morning, every 30 minutes on Sunday from
-about 9am to 7:30pm ET, and every 30 minutes before Thursday and Monday night games. That
-way inactives and late injury news show up before each kickoff.
+it fresh. The `Website` workflow rebuilds it every morning, Tuesday night before waivers run,
+every 30 minutes on Sunday from about 9am to 7:30pm ET, and every 30 minutes before Thursday
+and Monday night games. That way inactives and late injury news show up before each kickoff.
+The page shows when it last updated and when the next update is due, and warns you if an
+update is overdue.
 
 One-time setup:
 

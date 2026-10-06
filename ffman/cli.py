@@ -9,7 +9,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-from . import notify, schedule, web
+from . import notify, schedule, updates, web
 from .http import FetchError
 from .providers import espn, sleeper
 from .report import analyze, render
@@ -120,7 +120,13 @@ def cmd_run(args) -> int:
         Path(args.output).write_text(text)
     if args.html:
         user, password = os.environ.get("FFMAN_SITE_USER"), os.environ.get("FFMAN_SITE_PASSWORD")
-        page = web.full_page(web.render_dashboard(reports, shown_week, errors, logout=bool(password)))
+        next_updates, run_url = [], None
+        if os.environ.get("GITHUB_ACTIONS"):  # the published site: show its update schedule
+            next_updates = updates.next_runs(updates.read_crons(), dt.datetime.now(dt.timezone.utc))
+            if repo := os.environ.get("GITHUB_REPOSITORY"):
+                run_url = f"https://github.com/{repo}/actions/workflows/site.yml"
+        page = web.full_page(web.render_dashboard(reports, shown_week, errors, logout=bool(password),
+                                                  next_updates=next_updates, run_url=run_url))
         if user and password:
             from .lock import login_page
             page = login_page(page, user, password)
@@ -139,7 +145,10 @@ def cmd_run(args) -> int:
         channels = notify.send(config.get("notify", {}), notify.summary(reports, shown_week))
         print(f"Notified via: {', '.join(channels) or 'nothing configured'}", file=sys.stderr)
     if args.quiet:
+        no_waivers = sum(1 for r in reports if r.team.waiver_note and "unavailable" in r.team.waiver_note)
         print(f"{len(reports)} leagues checked, {sum(r.needs_changes for r in reports)} need changes, "
+              f"{sum(len(r.waivers) for r in reports)} waiver ideas"
+              f"{f' ({no_waivers} leagues without waiver data)' if no_waivers else ''}, "
               f"{len(errors)} problems.", file=sys.stderr)
     return 1 if errors and not reports else 0
 

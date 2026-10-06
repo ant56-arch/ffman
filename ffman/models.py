@@ -54,6 +54,12 @@ class Player:
     opponent: str | None = None
     home: bool = True
     locked: bool = False  # game already started: can't be moved
+    # Used for waiver suggestions.
+    next_projection: float = 0.0       # next week's projection
+    rank: int | None = None            # platform's overall rank (lower = more valuable)
+    owned_pct: float | None = None     # % of leagues where the player is rostered
+    trending: int | None = None        # adds in the last 24 hours (Sleeper)
+    waiver_status: str | None = None   # "Free agent" / "On waivers", when known
 
     @property
     def is_out(self) -> bool:
@@ -70,6 +76,11 @@ class Player:
     def status_label(self) -> str | None:
         status = (self.injury_status or "").replace("_", " ")
         return (status.upper() if len(status) <= 3 else status.title()) or None
+
+    @property
+    def two_week(self) -> float:
+        """This week (injury-adjusted) plus next week: the waiver value we compare on."""
+        return self.effective_projection + self.next_projection
 
     @property
     def matchup(self) -> str | None:
@@ -122,3 +133,7 @@ class Team:
     # Everyone who could be started (excludes IR / taxi squad).
     roster: list[Player]
     current: Lineup
+    # Best available players in this league (filled by providers that support it).
+    free_agents: list[Player] = field(default_factory=list)
+    waiver_note: str | None = None     # e.g. "FAAB: $72 of $100 left"
+    long_term: bool = False            # keeper/dynasty league: be careful dropping players

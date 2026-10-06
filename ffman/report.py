@@ -8,6 +8,7 @@ from typing import NamedTuple
 
 from .models import RISKY_STATUSES, Lineup, Player, Team, fmt_time
 from .optimizer import optimal_lineup
+from .waivers import Pickup, suggest
 
 CLOSE_CALL = 1.5  # projected points; smaller gains are flagged as toss-ups
 
@@ -48,6 +49,7 @@ class LeagueReport:
     start: list[Move] = field(default_factory=list)
     alerts: list[Alert] = field(default_factory=list)
     min_gain: float = 0.5
+    waivers: list[Pickup] = field(default_factory=list)
 
     @property
     def warnings(self) -> list[str]:
@@ -96,7 +98,7 @@ def analyze(team: Team, min_gain: float = 0.5) -> LeagueReport:
         elif (player.injury_status or "").upper() in RISKY_STATUSES:
             when = f" before {fmt_time(player.kickoff)}" if player.kickoff else " before kickoff"
             alerts.append(Alert("warn", f"{player.label()} is {player.status_label} - check the inactive list{when}.", player))
-    return LeagueReport(team, best, start, alerts, min_gain)
+    return LeagueReport(team, best, start, alerts, min_gain, suggest(team))
 
 
 @dataclass
@@ -107,6 +109,7 @@ class GamePlan:
     pickups: list[tuple[LeagueReport, Alert]]
     watch: list[tuple[LeagueReport, Alert]]
     all_set: list[LeagueReport]
+    waivers: list[tuple[LeagueReport, Pickup]] = field(default_factory=list)
 
 
 def _soonest(moment: dt.datetime | None) -> tuple:
@@ -119,11 +122,24 @@ def game_plan(reports: list[LeagueReport]) -> GamePlan:
     pickups = [(r, a) for r in reports for a in r.alerts if a.level == "bad"]
     watch = [(r, a) for r in reports for a in r.alerts if a.level == "warn"]
     watch.sort(key=lambda ra: _soonest(ra[1].deadline))
-    return GamePlan(moves, pickups, watch, [r for r in reports if not r.needs_changes])
+    waivers = [(r, w) for r in reports for w in r.waivers]
+    waivers.sort(key=lambda rw: (-rw[1].week_gain, -rw[1].two_week_gain))
+    return GamePlan(moves, pickups, watch, [r for r in reports if not r.needs_changes], waivers)
 
 
 def deadline_label(moment: dt.datetime | None) -> str:
     return f"Before {fmt_time(moment)}" if moment else "Any time"
+
+
+def waiver_line(w: Pickup) -> str:
+    add = w.add
+    extra = [f"{add.effective_projection:.1f} this week, {add.next_projection:.1f} next"]
+    if add.trending:
+        extra.append(f"{add.trending:,} adds in 24h")
+    if add.owned_pct is not None:
+        extra.append(f"{add.owned_pct:.0f}% rostered")
+    drop = f", drop {w.drop.name} ({w.drop.position})" if w.drop else ""
+    return f"Add {add.name} ({add.position}, {add.team or 'FA'}){drop}. {w.reason}. [{'; '.join(extra)}]"
 
 
 def _pts(value: float) -> str:
@@ -157,6 +173,10 @@ def render(reports: list[LeagueReport], week: int | None = None) -> str:
     if plan.pickups:
         lines.append("## Waiver pickups needed")
         lines.extend(f"- {r.team.league_name}: {a.text}" for r, a in plan.pickups)
+        lines.append("")
+    if plan.waivers:
+        lines.append("## Waiver wire")
+        lines.extend(f"- {r.team.league_name}: {waiver_line(w)}" for r, w in plan.waivers)
         lines.append("")
     if plan.watch:
         lines.append("## Watch list")

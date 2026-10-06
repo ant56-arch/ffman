@@ -144,6 +144,19 @@ footer { color: var(--muted); font-size: 12px; }
 .pitem .delta { font: 700 14px var(--mono); color: var(--turf); white-space: nowrap; }
 .pitem.bad { background: var(--bad-soft); }
 .pitem.warn { background: var(--warn-soft); }
+.pitem .detail { display: block; font: 500 12px var(--mono); color: var(--muted); margin-top: 2px; }
+.pitem .why { display: block; font-size: 14px; margin-top: 2px; }
+.pitem.waiver { background: var(--turf-soft); }
+.pitem.waiver.tough { background: var(--warn-soft); }
+.wnote { font-size: 12px; color: var(--muted); font-weight: 600; text-transform: none; letter-spacing: 0; }
+.updates { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px;
+  font-size: 14px; }
+.updates summary { color: var(--ink); font-size: 14px; }
+.updates ul { margin: 8px 0 4px; padding-left: 18px; }
+.updates p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
+.updates a, .stale a { color: var(--turf); font-weight: 700; }
+.stale { background: var(--warn-soft); color: var(--ink); border-radius: 10px; padding: 10px 14px; font-size: 14px; }
+.plan.inset { padding: 12px; gap: 10px; }
 .allset { color: var(--muted); font-size: 14px; margin: 0; }
 .allset b { color: var(--turf); }
 .section-label { font: 800 15px var(--display); text-transform: uppercase; letter-spacing: .06em;
@@ -247,6 +260,12 @@ def _league(r: LeagueReport, anchor: str) -> str:
         parts.append('<ul class="alerts">' + "".join(
             f'<li class="{a.level}">{_e(a.text)}</li>' for a in r.alerts) + '</ul>')
 
+    if r.waivers or t.waiver_note:
+        note = f' <span class="wnote">{_e(t.waiver_note)}</span>' if t.waiver_note else ""
+        items = "".join(_waiver_item(w) for w in r.waivers)
+        body = f'<ul>{items}</ul>' if items else '<p class="note">No pickups worth making right now.</p>'
+        parts.append(f'<div class="plan inset"><h3>Waiver wire{note}</h3>{body}</div>')
+
     new_ids = {m.player.id for m in r.start}
     rows = []
     for slot, player in zip(r.best.slots, r.best.players):
@@ -294,6 +313,9 @@ def _plan(reports: list[LeagueReport], anchors: dict[int, str]) -> str:
         parts.append('<h3>Waiver pickups needed</h3><ul>' + "".join(
             f'<li class="pitem bad"><div class="what">{link(r)}{_e(a.text)}</div></li>'
             for r, a in plan.pickups) + "</ul>")
+    if plan.waivers:
+        parts.append('<h3>Waiver wire</h3><ul>' + "".join(
+            _waiver_item(w, link(r), r.team.waiver_note) for r, w in plan.waivers) + "</ul>")
     if plan.watch:
         parts.append('<h3 class="calm">Watch list</h3><ul>' + "".join(
             f'<li class="pitem warn"><div class="what">{link(r)}{_e(a.text)}</div></li>'
@@ -305,6 +327,52 @@ def _plan(reports: list[LeagueReport], anchors: dict[int, str]) -> str:
     return "".join(parts)
 
 
+def _waiver_item(w, league_link: str = "", note: str | None = None) -> str:
+    add = w.add
+    facts = [f"{add.effective_projection:.1f} proj this week", f"{add.next_projection:.1f} next week"]
+    if add.trending:
+        facts.append(f"{add.trending:,} adds in 24h")
+    if add.owned_pct is not None:
+        facts.append(f"{add.owned_pct:.0f}% rostered")
+    if add.waiver_status and add.waiver_status != "Available":
+        facts.append(add.waiver_status.lower())
+    if note:
+        facts.append(note)
+    game = f", {add.matchup}" if add.matchup else (", BYE" if add.bye else "")
+    drop = (f' &middot; drop <b>{_e(w.drop.name)}</b> ({_e(w.drop.position)})' if w.drop else "")
+    return (f'<li class="pitem waiver{" tough" if w.tough else ""}"><div class="what">{league_link}'
+            f'Add <b>{_e(add.name)}</b> ({_e(add.position)}, {_e(add.team or "FA")}{_e(game)}){drop}'
+            f'<span class="why">{_e(w.reason)}</span>'
+            f'<span class="detail">{_e(" · ".join(facts))}</span></div>'
+            f'<span class="delta">+{max(w.week_gain, 0):.1f}</span></li>')
+
+
+def _updates(generated: dt.datetime, next_updates: list[dt.datetime], run_url: str | None) -> str:
+    """When the page refreshes next, plus a warning if it's overdue."""
+    if not next_updates:
+        return ""
+    times = "".join(f"<li>{_e(fmt_time(t))}</li>" for t in next_updates)
+    now_link = (f' Need it sooner? <a href="{_e(run_url)}" target="_blank" rel="noopener">Update now on GitHub</a>'
+                ' (Run workflow).' if run_url else "")
+    due = int(next_updates[0].timestamp() * 1000)
+    return (
+        f'<details class="updates"><summary>Next update about <b>{_e(fmt_time(next_updates[0]))}</b>'
+        ' &middot; schedule</summary>'
+        f'<ul>{times}</ul>'
+        '<p>Updates every morning around 9 AM, Tuesday night before waivers run, every 30 minutes '
+        'on Sundays (about 9 AM to 8 PM), and every 30 minutes before Thursday and Monday night '
+        'games. Each update pulls fresh '
+        'projections, injuries and rosters. GitHub sometimes starts them a few minutes late.'
+        f'{now_link}</p></details>'
+        f'<div class="stale" id="stale" hidden>This page was due to update at '
+        f'{_e(fmt_time(next_updates[0]))} and hasn\'t yet, so the info below may be out of date. '
+        'Updates sometimes run late; check back in a few minutes'
+        f'{f""" or <a href="{_e(run_url)}" target="_blank" rel="noopener">update it now</a>""" if run_url else ""}.</div>'
+        f'<script>(function(){{var due={due};'
+        'if(Date.now()>due+45*60*1000){var el=document.getElementById("stale");if(el)el.hidden=false;}})();</script>'
+    )
+
+
 LOCK_BUTTON = (
     '<button type="button" class="lockbtn" '
     "onclick=\"try{localStorage.removeItem('ffman-key')}catch(e){};location.reload()\">"
@@ -314,19 +382,22 @@ LOCK_BUTTON = (
 
 def render_dashboard(reports: list[LeagueReport], week: int | None, errors: list[str],
                      generated: dt.datetime | None = None, week_picker: bool = False,
-                     logout: bool = False) -> str:
+                     logout: bool = False, next_updates: list[dt.datetime] | None = None,
+                     run_url: str | None = None) -> str:
     """The page body: <title>, styles and content (no <html>/<body> wrapper)."""
     generated = generated or dt.datetime.now().astimezone()
     ordered = sorted(reports, key=lambda r: (not r.needs_changes, -r.gain))
     todo = [r for r in ordered if r.needs_changes]
     gain = sum(r.gain for r in todo)
     moves = sum(len(r.start) for r in todo)
-    pickups = sum(1 for r in ordered for a in r.alerts if a.level == "bad")
+    waiver_ideas = sum(len(r.waivers) for r in ordered)
     locked = any(p.locked for r in ordered for p in r.team.roster)
 
     out = ["<title>ffman Lineups</title>", STYLE, '<main class="wrap">', "<header><div>",
            f'<h1>Lineups <span>Week {week}</span></h1>' if week else "<h1>Lineups</h1>",
-           f'<div class="meta">Projections, injuries and rosters as of {_e(_when(generated))}</div></div>']
+           f'<div class="meta">Projections, injuries and rosters as of {_e(_when(generated))}'
+           + (f' &middot; next update about {_e(fmt_time(next_updates[0]))}' if next_updates else "")
+           + '</div></div>']
     if week_picker:
         options = "".join(f'<option value="{w}"{" selected" if w == week else ""}>Week {w}</option>'
                           for w in range(1, 19))
@@ -341,7 +412,8 @@ def render_dashboard(reports: list[LeagueReport], week: int | None, errors: list
                f'<div class="stat"><small>Leagues</small><b>{len(ordered)}</b></div>'
                f'<div class="stat"><small>Moves to make</small><b>{moves}</b></div>'
                f'<div class="stat"><small>Points to gain</small><b>+{gain:.1f}</b></div>'
-               f'<div class="stat"><small>Pickups needed</small><b>{pickups}</b></div></div>')
+               f'<div class="stat"><small>Waiver ideas</small><b>{waiver_ideas}</b></div></div>')
+    out.append(_updates(generated, next_updates or [], run_url))
     note = "Suggestions only. Nothing has been changed in any of your leagues."
     if locked:
         note += " Players whose games have started are locked and left where they are."

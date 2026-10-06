@@ -133,6 +133,55 @@ class LockAndPlanTests(unittest.TestCase):
         self.assertFalse(plan.moves[1][1].close_call)
 
 
+class UpdateScheduleTests(unittest.TestCase):
+    def test_next_runs_from_workflow_crons(self):
+        import datetime as dt
+        from ffman import updates
+        crons = updates.read_crons()  # the real workflow file
+        self.assertIn("7 13 * * *", crons)
+        mon = dt.datetime(2026, 10, 5, 21, 10, tzinfo=dt.timezone.utc)  # Monday 5:10pm ET
+        runs = updates.next_runs(crons, mon, count=3)
+        self.assertEqual([r.strftime("%a %H:%M") for r in runs], ["Mon 21:37", "Mon 22:07", "Mon 22:37"])
+        tue = updates.next_runs(crons, dt.datetime(2026, 10, 6, 14, 0, tzinfo=dt.timezone.utc), 1)
+        self.assertEqual(tue[0], dt.datetime(2026, 10, 7, 1, 7, tzinfo=dt.timezone.utc))  # Tue 9:07pm ET
+
+
+class WaiverTests(unittest.TestCase):
+    def _team(self, roster, current, fas, slots=("QB", "WR", "DEF")):
+        t = team(list(slots), roster, current)
+        t.free_agents = fas
+        return t
+
+    def test_fills_hole_and_never_drops_stars_or_last_kicker(self):
+        from ffman.waivers import suggest
+        qb, wr, star = player("qb", "QB", 20), player("wr", "WR", 10), player("star", "WR", 0)
+        star.rank, star.next_projection = 5, 25        # star on bye: never dropped
+        dfn = player("d", "DEF", 0)                     # your DEF is on bye
+        dfn.next_projection = 6
+        scrub = player("scrub", "WR", 2)
+        scrub.next_projection = 2
+        fa_def = player("fad", "DEF", 9)
+        fa_def.next_projection = 7
+        t = self._team([qb, wr, star, dfn, scrub], ["qb", "wr", "d"], [fa_def])
+        picks = suggest(t)
+        self.assertEqual([(p.add.id, p.drop.id) for p in picks], [("fad", "scrub")])
+        self.assertAlmostEqual(picks[0].week_gain, 9)
+
+    def test_hot_pickup_only_dropped_for_a_big_gain(self):
+        from ffman.waivers import suggest
+        qb, wr, dfn = player("qb", "QB", 20), player("wr", "WR", 10), player("d", "DEF", 6)
+        qb.rank = wr.rank = 20                          # everyone else is a keeper
+        hot = player("hot", "WR", 3)
+        hot.trending = 500_000
+        small = player("fa", "WR", 13)                  # +3 this week: not worth a hot drop
+        t = self._team([qb, wr, dfn, hot], ["qb", "wr", "d"], [small])
+        self.assertEqual(suggest(t), [])
+        big = player("fa2", "WR", 20)                   # +10 this week: suggested, flagged
+        picks = suggest(self._team([qb, wr, dfn, hot], ["qb", "wr", "d"], [big]))
+        self.assertEqual(picks[0].drop.id, "hot")
+        self.assertIn("Tough call", picks[0].reason)
+
+
 class WeekTests(unittest.TestCase):
     def test_week_rolls_over_on_tuesday(self):
         import datetime as dt

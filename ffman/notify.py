@@ -12,7 +12,7 @@ from .report import LeagueReport, deadline_label, game_plan
 def summary(reports: list[LeagueReport], week: int | None) -> str:
     plan = game_plan(reports)
     head = f"Week {week}: " if week else ""
-    if not plan.moves and not plan.pickups and not plan.watch:
+    if not plan.moves and not plan.pickups and not plan.watch and not plan.waivers:
         return f"{head}all {len(reports)} lineups look good."
     lines = [f"{head}{len({id(r) for r, _ in plan.moves})} of {len(reports)} leagues need changes"]
     current = None
@@ -27,6 +27,10 @@ def summary(reports: list[LeagueReport], week: int | None) -> str:
     if plan.pickups:
         lines.append("\nPickups needed:")
         lines.extend(f"  {r.team.league_name}: {a.text}" for r, a in plan.pickups)
+    if plan.waivers:
+        lines.append("\nWaiver wire:")
+        lines.extend(f"  {r.team.league_name}: add {w.add.name}"
+                     + (f", drop {w.drop.name}" if w.drop else "") for r, w in plan.waivers)
     if plan.watch:
         lines.append("\nWatch:")
         lines.extend(f"  {r.team.league_name}: {a.text}" for r, a in plan.watch)
