@@ -207,6 +207,18 @@ class WebTests(unittest.TestCase):
         self.assertIn('name="week"', page)
         self.assertIn("ESPN 1: private", page)
 
+    def test_lineup_card_marks_new_starters_and_source_spread(self):
+        from ffman import web
+        roster = [player("a", "WR", 18, "Out"), player("b", "WR", 7)]
+        roster[1].platform_projection = 6.0
+        roster[1].sources = {"CBS": 8.0, "Draft Sharks": 7.0}
+        page = web.render_dashboard([analyze(team(["WR"], roster, ["a"]))], 5, [])
+        self.assertIn('class="row in"', page)
+        self.assertIn("instead of <s>Player a</s>", page)
+        self.assertIn("<b>3 projections</b>", page)
+        self.assertIn("<span>CBS<i>8.0</i></span>", page)
+        self.assertIn('data-done="League|b|a"', page)
+
 
 class LockTests(unittest.TestCase):
     def test_page_decrypts_only_with_right_login(self):

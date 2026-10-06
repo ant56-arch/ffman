@@ -2,177 +2,293 @@
 
 `render_dashboard` builds the page body (also used for static snapshots);
 `serve` runs a small local site that refreshes data on each load.
+
+Design: a printed lineup card. Warm paper, ink-black type, one fountain-pen blue for
+anything you act on, and green/amber/red kept strictly for gains, watch items and problems.
+Headlines are set in Fraunces; everything you read is Atkinson Hyperlegible, a typeface
+drawn for legibility. Position colors were checked for color-blind separation and always
+sit next to the position's name, so color is never the only cue.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import html
+import math
 import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .models import RISKY_STATUSES, Player, fmt_time
-from .report import LeagueReport, deadline_label, game_plan
+from .report import LeagueReport, Move, deadline_label, game_plan
 
 POSITION_CLASS = {"QB": "qb", "RB": "rb", "WR": "wr", "TE": "te", "K": "k", "DEF": "def"}
+WAIVERS_SHOWN = 4  # the rest fold into "N more waiver ideas"
 SLOT_LABEL = {"SUPER_FLEX": "SFLX", "REC_FLEX": "W/T", "WRRB_FLEX": "W/R", "IDP_FLEX": "IDP"}
+
+FONTS = ("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,800"
+         "&family=Atkinson+Hyperlegible+Next:wght@400;600;700"
+         "&family=Atkinson+Hyperlegible+Mono:wght@500;700&display=swap")
 
 STYLE = """
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@600;800&family=Source+Sans+3:wght@400;600;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="%FONTS%">
 <style>
-/* Layout: a coach's sheet. Summary strip up top, then one card per league,
-   leagues needing moves first. Position colors follow fantasy-app convention. */
 :root {
-  --bg: #f3f5f1; --surface: #ffffff; --ink: #18211b; --muted: #5d6a61; --line: #dbe1da;
-  --turf: #1f6b3a; --turf-soft: #e1efe5;
-  --warn: #9a6200; --warn-soft: #fbf0d9; --bad: #b3261e; --bad-soft: #fbe4e2;
-  --qb: #c2414b; --rb: #2f8a57; --wr: #2f6fb3; --te: #c7721c; --k: #7a5bb5; --def: #5b6670;
-  --display: "Saira Condensed", "Arial Narrow", sans-serif;
-  --body: "Source Sans 3", "Segoe UI", system-ui, sans-serif;
-  --mono: "IBM Plex Mono", ui-monospace, monospace;
+  --paper: #f4f0e6; --card: #fffdf8; --ink: #1d1c19; --ink2: #3f3b34; --muted: #6b6559;
+  --rule: #ddd5c4; --heavy: #1d1c19;
+  --accent: #2b3f9e; --accent-soft: #e4e8f7;
+  --good: #1e7a45; --good-soft: #e1f0e4; --warn: #8f5500; --warn-soft: #f8ebcf;
+  --bad: #b3261e; --bad-soft: #f8e0dc;
+  --qb: #c8432b; --rb: #14895a; --wr: #7a4fc9; --te: #b97a00; --k: #2f68c9; --def: #5e7a21;
+  --display: "Fraunces", Georgia, "Times New Roman", serif;
+  --body: "Atkinson Hyperlegible Next", "Atkinson Hyperlegible", "Segoe UI", system-ui, sans-serif;
+  --mono: "Atkinson Hyperlegible Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme: light;
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-  --bg: #111613; --surface: #19201b; --ink: #e7ece8; --muted: #9aa69e; --line: #2b352e;
-  --turf: #5fc184; --turf-soft: #1d3325;
-  --warn: #e9b44c; --warn-soft: #3a2f17; --bad: #f2867e; --bad-soft: #3d1f1d;
-  --qb: #e57a83; --rb: #6cc595; --wr: #74a9e3; --te: #e8a35c; --k: #ab92dc; --def: #9aa6b0;
+  --paper: #12141a; --card: #1b1e27; --ink: #ece7dc; --ink2: #cfc9bc; --muted: #a39d90;
+  --rule: #2f3340; --heavy: #ece7dc;
+  --accent: #9daeff; --accent-soft: #252c4a;
+  --good: #6acb8e; --good-soft: #1b3126; --warn: #e8b65a; --warn-soft: #382c14;
+  --bad: #f28b82; --bad-soft: #3d2120;
+  --qb: #e2604b; --rb: #2fa672; --wr: #9479e6; --te: #ba8418; --k: #5b88e0; --def: #7a9634;
   color-scheme: dark;
 } }
 :root[data-theme="dark"] {
-  --bg: #111613; --surface: #19201b; --ink: #e7ece8; --muted: #9aa69e; --line: #2b352e;
-  --turf: #5fc184; --turf-soft: #1d3325;
-  --warn: #e9b44c; --warn-soft: #3a2f17; --bad: #f2867e; --bad-soft: #3d1f1d;
-  --qb: #e57a83; --rb: #6cc595; --wr: #74a9e3; --te: #e8a35c; --k: #ab92dc; --def: #9aa6b0;
+  --paper: #12141a; --card: #1b1e27; --ink: #ece7dc; --ink2: #cfc9bc; --muted: #a39d90;
+  --rule: #2f3340; --heavy: #ece7dc;
+  --accent: #9daeff; --accent-soft: #252c4a;
+  --good: #6acb8e; --good-soft: #1b3126; --warn: #e8b65a; --warn-soft: #382c14;
+  --bad: #f28b82; --bad-soft: #3d2120;
+  --qb: #e2604b; --rb: #2fa672; --wr: #9479e6; --te: #ba8418; --k: #5b88e0; --def: #7a9634;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
-body { background: var(--bg); color: var(--ink); font: 400 15px/1.45 var(--body); margin: 0; }
-.wrap { max-width: 980px; margin: 0 auto; padding-inline: 16px; padding-block: 28px 48px;
-  display: grid; gap: 22px; }
-header { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px; }
-h1 { font: 800 clamp(30px, 6vw, 44px)/1 var(--display); letter-spacing: .01em; margin: 0;
-  text-transform: uppercase; text-wrap: balance; }
-h1 span { color: var(--turf); }
-.meta { color: var(--muted); font-size: 13px; }
-.weekform { display: flex; gap: 8px; align-items: center; font-size: 14px; }
-.weekform select, .weekform button { font: inherit; padding: 6px 10px; border-radius: 6px;
-  border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
-.weekform button { background: var(--turf); border-color: var(--turf); color: var(--surface);
-  font-weight: 700; cursor: pointer; }
-:focus-visible { outline: 2px solid var(--turf); outline-offset: 2px; }
-.strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px;
-  background: var(--line); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-.stat { background: var(--surface); padding: 14px 16px; display: grid; gap: 2px; }
-.stat b { font: 800 30px/1 var(--display); font-variant-numeric: tabular-nums; }
-.stat small { color: var(--muted); text-transform: uppercase; letter-spacing: .08em; font-size: 11px;
-  font-weight: 700; }
-.note { color: var(--muted); font-size: 13px; margin: 0; }
-.league { background: var(--surface); border: 1px solid var(--line); border-radius: 12px;
-  padding: 18px; display: grid; gap: 14px; min-width: 0; }
-.league.todo { border-top: 4px solid var(--warn); }
-.league.ok { border-top: 4px solid var(--turf); }
-.lhead { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: start; }
-.lhead h2 { font: 800 24px/1.05 var(--display); margin: 0; text-transform: uppercase; letter-spacing: .01em; }
-.lhead .team { color: var(--muted); font-size: 14px; }
-.chips { display: flex; gap: 6px; flex-wrap: wrap; }
-.chip { font-size: 11px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
-  padding: 3px 8px; border-radius: 999px; background: var(--bg); color: var(--muted); }
-.chip.todo { background: var(--warn-soft); color: var(--warn); }
-.chip.ok { background: var(--turf-soft); color: var(--turf); }
-.score { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
-.score .now { font: 600 18px var(--mono); color: var(--muted); }
-.score .best { font: 800 30px/1 var(--display); }
-.score .gain { font: 700 15px var(--mono); color: var(--turf); }
-.bar { height: 6px; border-radius: 3px; background: var(--line); position: relative; overflow: hidden; }
-.bar i { position: absolute; inset: 0 auto 0 0; background: var(--muted); border-radius: 3px; }
-.bar i.add { background: var(--turf); }
-.moves { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
-.move { display: grid; grid-template-columns: 1fr auto 1fr auto; gap: 10px; align-items: center;
-  padding: 10px 12px; border-radius: 8px; background: var(--bg); }
-.move .in, .move .out { display: grid; gap: 1px; min-width: 0; }
-.move .tag { font-size: 10px; font-weight: 800; letter-spacing: .1em; }
-.move .in .tag { color: var(--turf); }
-.move .out .tag { color: var(--bad); }
-.move .name { font-weight: 700; overflow-wrap: anywhere; }
-.move .out .name { font-weight: 600; color: var(--muted); }
-.move .arrow { color: var(--muted); font-size: 13px; }
-.move .delta { font: 700 14px var(--mono); color: var(--turf); white-space: nowrap; }
-.pos { display: inline-block; min-width: 34px; text-align: center; font: 700 11px var(--mono);
-  padding: 1px 5px; border-radius: 4px; color: var(--surface); background: var(--def); margin-right: 6px; }
-.pos.qb { background: var(--qb); } .pos.rb { background: var(--rb); } .pos.wr { background: var(--wr); }
-.pos.te { background: var(--te); } .pos.k { background: var(--k); } .pos.def { background: var(--def); }
-.proj { font: 500 13px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
-.flag { font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 4px; margin-left: 6px;
-  white-space: nowrap; }
-.flag.warn { background: var(--warn-soft); color: var(--warn); }
-.flag.bad { background: var(--bad-soft); color: var(--bad); }
-.alerts { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.alerts li { padding: 8px 12px; border-radius: 8px; font-size: 14px; background: var(--warn-soft); }
-.alerts li.bad { background: var(--bad-soft); }
-.good { margin: 0; color: var(--turf); font-weight: 600; }
-details summary { cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 600; }
-.tablewrap { overflow-x: auto; margin-top: 8px; }
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-td { padding: 6px 8px; border-top: 1px solid var(--line); }
-td.slot { font: 700 12px var(--mono); color: var(--muted); width: 56px; }
-td.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
-tr.new td { background: var(--turf-soft); }
-.problems { background: var(--bad-soft); border-radius: 10px; padding: 12px 16px; }
-.problems h2 { font: 800 18px var(--display); text-transform: uppercase; margin: 0 0 4px; color: var(--bad); }
-.problems ul { margin: 0; padding-left: 18px; }
-footer { color: var(--muted); font-size: 12px; }
-.range { display: block; font: 500 11px var(--mono); color: var(--muted); cursor: help;
-  text-decoration: underline dotted; text-underline-offset: 2px; white-space: nowrap; }
-.game { display: block; font: 500 12px var(--mono); color: var(--muted); margin-top: 1px; }
-.flag.lock { background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
-.flag.close { background: var(--bg); color: var(--muted); border: 1px dashed var(--line); }
-.plan { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px;
-  display: grid; gap: 14px; min-width: 0; }
-.plan h2 { font: 800 24px/1 var(--display); text-transform: uppercase; margin: 0; letter-spacing: .01em; }
-.plan h3 { font: 800 15px var(--display); text-transform: uppercase; letter-spacing: .06em; margin: 0;
-  color: var(--warn); display: flex; align-items: center; gap: 8px; }
-.plan h3.calm { color: var(--muted); }
-.plan h3::after { content: ""; flex: 1; height: 1px; background: var(--line); }
-.plan ol, .plan ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.pitem { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: baseline;
-  padding: 9px 12px; border-radius: 8px; background: var(--bg); }
-.pitem .what { min-width: 0; overflow-wrap: anywhere; }
-.pitem .what b { font-weight: 700; }
-.pitem .league-link { font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
-  color: var(--muted); text-decoration: none; display: block; }
-.pitem .league-link:hover { color: var(--turf); }
-.pitem .delta { font: 700 14px var(--mono); color: var(--turf); white-space: nowrap; }
-.pitem.bad { background: var(--bad-soft); }
-.pitem.warn { background: var(--warn-soft); }
-.pitem .detail { display: block; font: 500 12px var(--mono); color: var(--muted); margin-top: 2px; }
-.pitem .why { display: block; font-size: 14px; margin-top: 2px; }
-.pitem.waiver { background: var(--turf-soft); }
-.pitem.waiver.tough { background: var(--warn-soft); }
-.wnote { font-size: 12px; color: var(--muted); font-weight: 600; text-transform: none; letter-spacing: 0; }
-.updates { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px;
-  font-size: 14px; }
-.updates summary { color: var(--ink); font-size: 14px; }
-.updates ul { margin: 8px 0 4px; padding-left: 18px; }
-.updates p { margin: 6px 0 0; color: var(--muted); font-size: 13px; }
-.updates a, .stale a { color: var(--turf); font-weight: 700; }
-.stale { background: var(--warn-soft); color: var(--ink); border-radius: 10px; padding: 10px 14px; font-size: 14px; }
-.plan.inset { padding: 12px; gap: 10px; }
-.allset { color: var(--muted); font-size: 14px; margin: 0; }
-.allset b { color: var(--turf); }
-.section-label { font: 800 15px var(--display); text-transform: uppercase; letter-spacing: .06em;
-  color: var(--muted); margin: 6px 0 -8px; }
-.lockbtn { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 6px; cursor: pointer;
-  border: 1px solid var(--line); background: var(--surface); color: var(--muted); }
-@media (max-width: 560px) {
-  .move { grid-template-columns: 1fr auto; }
-  .move .arrow { display: none; }
-  .move .out { grid-column: 1; }
-  .move .delta { grid-row: 1; grid-column: 2; }
+html { -webkit-text-size-adjust: 100%; scroll-padding-top: 64px; }
+body { margin: 0; background: var(--paper); color: var(--ink);
+  font: 400 17px/1.55 var(--body); font-variant-numeric: tabular-nums; }
+a { color: var(--accent); text-underline-offset: 3px; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.wrap { max-width: 920px; margin: 0 auto; padding: 0 16px 64px; }
+.num { font-family: var(--mono); font-weight: 500; }
+
+/* Masthead */
+.mast { padding: 28px 0 14px; border-bottom: 3px double var(--heavy); display: grid; gap: 6px; }
+.mast .top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.kicker { font: 700 13px/1 var(--body); letter-spacing: .16em; text-transform: uppercase; color: var(--muted); }
+.mast h1 { font: 800 clamp(44px, 11vw, 76px)/.95 var(--display); letter-spacing: -.02em; margin: 2px 0 0; }
+.mast h1 em { font-style: normal; color: var(--accent); }
+.dateline { color: var(--ink2); font-size: 15px; }
+.tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.btn { font: 600 14px var(--body); padding: 7px 12px; border-radius: 999px; cursor: pointer;
+  border: 1.5px solid var(--rule); background: var(--card); color: var(--ink2); }
+.btn:hover { border-color: var(--ink2); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--card); }
+select.btn { padding-right: 8px; }
+
+/* League jump bar */
+.jump { position: sticky; top: 0; z-index: 5; background: var(--paper); border-bottom: 1px solid var(--rule);
+  display: flex; gap: 6px; overflow-x: auto; padding: 10px 0; scrollbar-width: none; }
+.jump::-webkit-scrollbar { display: none; }
+.jump a { flex: none; text-decoration: none; color: var(--ink); font-weight: 600; font-size: 14px;
+  padding: 6px 12px; border-radius: 999px; background: var(--card); border: 1.5px solid var(--rule);
+  display: inline-flex; gap: 7px; align-items: center; }
+.jump a:hover { border-color: var(--ink2); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); flex: none; }
+.dot.todo { background: var(--accent); }
+.dot.bad { background: var(--bad); }
+
+/* The one-sentence summary */
+.lede { font: 600 clamp(21px, 4.4vw, 27px)/1.35 var(--display); margin: 26px 0 6px; max-width: 34ch; }
+.lede b { color: var(--accent); }
+.lede .plus { color: var(--good); }
+.sub { color: var(--muted); font-size: 15px; margin: 0 0 8px; }
+
+/* Section heads */
+h2.sec { font: 800 15px/1 var(--body); letter-spacing: .14em; text-transform: uppercase; color: var(--ink2);
+  margin: 38px 0 12px; display: flex; align-items: center; gap: 12px; }
+h2.sec::after { content: ""; flex: 1; border-top: 1.5px solid var(--heavy); }
+h3.when { font: 700 14px/1 var(--mono); color: var(--accent); margin: 18px 0 8px; letter-spacing: .02em; }
+
+/* To-do list */
+.tasks { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.item { display: grid; grid-template-columns: 28px 1fr auto; gap: 4px 12px; align-items: start;
+  background: var(--card); border: 1.5px solid var(--rule); border-radius: 12px; padding: 14px 16px; }
+.item input { width: 22px; height: 22px; margin: 3px 0 0; accent-color: var(--accent); cursor: pointer; }
+.item .what { min-width: 0; overflow-wrap: anywhere; font-size: 18px; line-height: 1.4; }
+.item .lg { display: block; font-size: 13px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 2px; text-decoration: none; }
+.item .lg:hover { color: var(--accent); }
+.item .why { display: block; color: var(--ink2); font-size: 15px; margin-top: 3px; }
+.item .gain { font: 700 22px/1.2 var(--mono); color: var(--good); white-space: nowrap; text-align: right; }
+.item .gain small { display: block; font: 600 12px var(--body); color: var(--muted); letter-spacing: .04em; }
+.item.done { opacity: .5; }
+.item.done .what b { text-decoration: line-through; }
+.item.bad { border-color: color-mix(in srgb, var(--bad) 45%, var(--rule)); background: var(--bad-soft); }
+.item.warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 35%, var(--rule)); }
+.item .icon { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; margin-top: 1px;
+  font: 800 14px var(--body); color: var(--card); background: var(--bad); }
+.item.warn .icon { background: var(--warn); }
+.item.add .icon { background: var(--good); }
+.item.tough { background: var(--warn-soft); }
+.allset { color: var(--ink2); margin: 14px 0 0; }
+.allset b { color: var(--good); }
+.tag { display: inline-block; font: 700 12px/1.6 var(--body); letter-spacing: .04em; padding: 0 7px;
+  border-radius: 5px; vertical-align: 2px; margin-left: 4px; white-space: nowrap; }
+.tag.out, .tag.bye { background: var(--bad-soft); color: var(--bad); }
+.tag.q { background: var(--warn-soft); color: var(--warn); }
+.tag.close { border: 1.5px dashed var(--rule); color: var(--muted); }
+.tag.lock { border: 1.5px solid var(--rule); color: var(--muted); }
+
+/* League cards */
+.league { background: var(--card); border: 1.5px solid var(--rule); border-radius: 16px; padding: 22px 20px 18px;
+  margin-top: 18px; display: grid; gap: 16px; min-width: 0; }
+.lhead { display: flex; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; align-items: end;
+  border-bottom: 1.5px solid var(--heavy); padding-bottom: 12px; }
+.lhead h3 { font: 800 clamp(24px, 5vw, 32px)/1.05 var(--display); margin: 0; letter-spacing: -.01em; }
+.lhead .team { color: var(--muted); font-size: 15px; margin-top: 4px; }
+.lhead .team b { color: var(--ink2); font-weight: 600; }
+.total { text-align: right; }
+.total .big { font: 700 34px/1 var(--mono); }
+.total .cap { display: block; font-size: 14px; color: var(--muted); margin-top: 4px; }
+.total .cap b { color: var(--good); }
+.verdict { font-size: 17px; margin: 0; }
+.verdict.ok { color: var(--good); font-weight: 600; }
+
+/* Lineup card rows */
+.card-key { display: grid; grid-template-columns: 54px 1fr 150px 64px; gap: 12px; font-size: 12px; font-weight: 700;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--muted); padding: 0 8px; }
+.card-key span:last-child, .card-key span:nth-child(3) { text-align: right; }
+.rows { list-style: none; margin: 0; padding: 0; }
+.row { display: grid; grid-template-columns: 54px 1fr 150px 64px; gap: 4px 12px; align-items: center;
+  padding: 11px 8px; border-top: 1px solid var(--rule); }
+.row:first-child { border-top: 0; }
+.row.in { background: var(--accent-soft); border-radius: 10px; border-top-color: transparent; }
+.row.in + .row { border-top-color: transparent; }
+.slot { font: 700 13px var(--mono); color: var(--muted); }
+.row.in .slot { color: var(--accent); }
+.who { min-width: 0; }
+.who .name { font-weight: 700; font-size: 17px; }
+.who .team { color: var(--muted); font-size: 14px; margin-left: 4px; }
+.who .game { display: block; color: var(--muted); font-size: 14px; }
+.who .was { display: block; font-size: 14px; color: var(--ink2); margin-top: 2px; }
+.who .was s { text-decoration-thickness: 1.5px; }
+.badge-in { font: 800 11px/1.7 var(--body); letter-spacing: .1em; color: var(--card); background: var(--accent);
+  padding: 0 6px; border-radius: 4px; margin-right: 6px; vertical-align: 2px; }
+.pos { display: inline-flex; align-items: center; gap: 5px; font: 700 12px var(--mono); color: var(--ink2);
+  margin-right: 7px; vertical-align: 1px; }
+.pos i { width: 9px; height: 9px; border-radius: 2px; background: var(--def); }
+.pos.qb i { background: var(--qb); } .pos.rb i { background: var(--rb); } .pos.wr i { background: var(--wr); }
+.pos.te i { background: var(--te); } .pos.k i { background: var(--k); }
+.pts { font: 700 19px var(--mono); text-align: right; }
+.pts.zero { color: var(--bad); }
+
+/* Source spread: thin track, a bar from the lowest to the highest source, a dot at the number used */
+.spread { position: relative; display: block; height: 28px; outline: none; cursor: help; }
+.spread svg { display: block; width: 100%; height: 28px; overflow: visible; }
+.spread .track { stroke: var(--rule); stroke-width: 2; stroke-linecap: round; }
+.spread .range { stroke: var(--accent); stroke-opacity: .32; stroke-width: 8; stroke-linecap: round; }
+.spread .pick { fill: var(--accent); stroke: var(--card); stroke-width: 2; }
+.spread .lohi { font: 500 10.5px var(--mono); fill: var(--muted); }
+.tip { position: absolute; right: 0; bottom: calc(100% + 6px); z-index: 4; min-width: 200px; max-width: 260px;
+  background: var(--ink); color: var(--paper); border-radius: 10px; padding: 10px 12px; font: 500 13px/1.5 var(--body);
+  box-shadow: 0 8px 24px rgb(0 0 0 / .18); opacity: 0; transform: translateY(4px); pointer-events: none;
+  transition: opacity .12s, transform .12s; }
+.tip b { display: block; font-weight: 700; margin-bottom: 4px; }
+.tip span { display: flex; justify-content: space-between; gap: 12px; }
+.tip span i { font-style: normal; font-family: var(--mono); }
+.spread:hover .tip, .spread:focus .tip { opacity: 1; transform: none; }
+.nospread { color: var(--muted); font-size: 13px; text-align: right; }
+
+/* Notes inside a card */
+.notes { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.notes li { padding: 9px 12px 9px 14px; border-left: 4px solid var(--warn); background: var(--warn-soft);
+  border-radius: 0 8px 8px 0; font-size: 15px; }
+.notes li.bad { border-left-color: var(--bad); background: var(--bad-soft); }
+details.more summary { cursor: pointer; font-weight: 700; font-size: 15px; color: var(--ink2); padding: 4px 0; }
+details.more[open] summary { margin-bottom: 6px; }
+.bench { list-style: none; margin: 0; padding: 0; columns: 2 260px; column-gap: 24px; }
+.bench li { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-top: 1px solid var(--rule);
+  break-inside: avoid; font-size: 15px; }
+.bench .num { color: var(--ink2); }
+.wire { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.wire li { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; padding: 10px 12px; border-radius: 10px;
+  background: var(--good-soft); font-size: 15px; }
+.wire li.tough { background: var(--warn-soft); }
+.wire .gain { font: 700 17px var(--mono); color: var(--good); }
+.wire .why, .wire .facts { grid-column: 1 / -1; color: var(--ink2); font-size: 14px; }
+.wire .facts { color: var(--muted); font-family: var(--mono); font-size: 13px; }
+.wnote { color: var(--muted); font-size: 14px; }
+
+/* Status boxes */
+.box { border-radius: 12px; padding: 12px 16px; margin-top: 16px; font-size: 15px; }
+.box.problems { background: var(--bad-soft); }
+.box.problems h2 { font: 800 15px var(--body); letter-spacing: .1em; text-transform: uppercase; margin: 0 0 4px; color: var(--bad); }
+.box.problems ul { margin: 0; padding-left: 18px; }
+.box.stale { background: var(--warn-soft); }
+details.updates { margin-top: 12px; font-size: 15px; color: var(--ink2); }
+details.updates summary { cursor: pointer; }
+details.updates ul { margin: 6px 0; padding-left: 20px; }
+details.updates p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+
+footer { margin-top: 44px; padding-top: 14px; border-top: 3px double var(--heavy); color: var(--muted);
+  font-size: 14px; display: grid; gap: 8px; }
+footer p { margin: 0; }
+
+@media (max-width: 620px) {
+  body { font-size: 16px; }
+  .item { grid-template-columns: 26px 1fr; padding: 13px 14px; }
+  .item .gain { grid-column: 2; text-align: left; font-size: 19px; }
+  .item .gain small { display: inline; margin-left: 6px; }
+  .card-key { display: none; }
+  .row { grid-template-columns: 38px 1fr 56px; gap: 2px 10px; padding: 10px 4px; }
+  .row .spread, .row .nospread { grid-column: 2 / 4; grid-row: 2; max-width: 240px; }
+  .row .nospread { text-align: left; }
+  .row .pts { grid-column: 3; grid-row: 1; }
+  .tip { left: 0; right: auto; }
+  .league { padding: 18px 14px 14px; }
+  .total { text-align: left; }
 }
-@media (prefers-reduced-motion: no-preference) { .bar i { transition: width .4s ease; } }
+@media (prefers-reduced-motion: reduce) { .tip { transition: none; } }
+@media print { .jump, .tools, details.updates { display: none; } .league { break-inside: avoid; } }
 </style>
+""".replace("%FONTS%", FONTS)
+
+SCRIPT = """
+<script>
+(function () {
+  var root = document.documentElement;
+  function store(fn) { try { return fn(window.localStorage); } catch (e) { return null; } }
+  // Theme: auto -> light -> dark, remembered on this device.
+  var saved = store(function (s) { return s.getItem("ffman-theme"); });
+  if (saved === "light" || saved === "dark") root.setAttribute("data-theme", saved);
+  var tb = document.getElementById("theme");
+  function label() { if (tb) tb.textContent = "Theme: " + (root.getAttribute("data-theme") || "auto"); }
+  label();
+  if (tb) tb.addEventListener("click", function () {
+    var cur = root.getAttribute("data-theme"), next = cur === "light" ? "dark" : cur === "dark" ? null : "light";
+    if (next) root.setAttribute("data-theme", next); else root.removeAttribute("data-theme");
+    store(function (s) { next ? s.setItem("ffman-theme", next) : s.removeItem("ffman-theme"); });
+    label();
+  });
+  // To-do checkboxes, remembered per week on this device.
+  var key = "ffman-done-" + (document.body.getAttribute("data-week") || "");
+  var done = {};
+  try { done = JSON.parse(store(function (s) { return s.getItem(key); }) || "{}") || {}; } catch (e) { done = {}; }
+  document.querySelectorAll("input[data-done]").forEach(function (box) {
+    var id = box.getAttribute("data-done"), item = box.closest(".item");
+    function paint() { if (item) item.classList.toggle("done", box.checked); }
+    box.checked = !!done[id]; paint();
+    box.addEventListener("change", function () {
+      if (box.checked) done[id] = 1; else delete done[id];
+      store(function (s) { s.setItem(key, JSON.stringify(done)); });
+      paint();
+    });
+  });
+})();
+</script>
 """
 
 
@@ -181,48 +297,65 @@ def _e(value) -> str:
 
 
 def _pos(player: Player) -> str:
-    return f'<span class="pos {POSITION_CLASS.get(player.position, "def")}">{_e(player.position)}</span>'
+    return (f'<span class="pos {POSITION_CLASS.get(player.position, "def")}"><i aria-hidden="true"></i>'
+            f'{_e(player.position)}</span>')
 
 
 def _flag(player: Player) -> str:
     if player.bye:
-        return '<span class="flag bad">BYE</span>'
+        return '<span class="tag bye">BYE</span>'
     status = (player.injury_status or "").upper()
     if player.is_out:
-        return f'<span class="flag bad">{_e(player.status_label)}</span>'
+        return f'<span class="tag out">{_e(player.status_label)}</span>'
     if status in RISKY_STATUSES:
-        return f'<span class="flag warn">{_e(player.status_label)}</span>'
+        return f'<span class="tag q">{_e(player.status_label)}</span>'
     return ""
 
 
 def _game(player: Player) -> str:
-    if player.bye or not player.kickoff:
+    if player.bye:
+        return '<span class="game">Bye week</span>'
+    if not player.kickoff:
         return ""
     when = "game under way" if player.locked else fmt_time(player.kickoff)
     return f'<span class="game">{_e(player.matchup)} &middot; {_e(when)}</span>'
 
 
-def _sources(player: Player) -> str:
-    """'14.1-20.9 · 6 sources' with each source's number in the tooltip, or ''."""
+def _name(player: Player) -> str:
+    team = f'<span class="team">{_e(player.team)}</span>' if player.team else ""
+    lock = '<span class="tag lock">Locked</span>' if player.locked else ""
+    return f'{_pos(player)}<span class="name">{_e(player.name)}</span>{team}{_flag(player)}{lock}'
+
+
+def _spread(player: Player, scale: float) -> str:
+    """Where every source landed for this player, drawn on the league's shared scale."""
     spread = player.source_range
     if not spread:
-        return ""
-    detail = [f"Platform {player.platform_projection:.1f}"] if player.platform_projection is not None else []
-    detail += [f"{k} {v:.1f}" for k, v in sorted(player.sources.items(), key=lambda kv: -kv[1])]
-    return (f'<span class="range" title="{_e(" · ".join(detail))}">'
-            f'{spread[0]:.1f}&ndash;{spread[1]:.1f} &middot; {len(detail)} sources</span>')
-
-
-def _player_cell(player: Player, game: bool = True) -> str:
-    team = f' <span class="proj">{_e(player.team)}</span>' if player.team else ""
-    lock = '<span class="flag lock">LOCKED</span>' if player.locked else ""
-    return (f'{_pos(player)}<span class="name">{_e(player.name)}</span>{team}{_flag(player)}{lock}'
-            + (_game(player) if game else ""))
+        return '<span class="nospread">1 source</span>'
+    lo, hi = spread
+    used = player.effective_projection
+    x = lambda v: 4 + max(0.0, min(v / scale, 1.0)) * 92  # noqa: E731  (percent of width)
+    rows = []
+    if player.platform_projection is not None:
+        rows.append(("Your league's site", player.platform_projection))
+    rows += sorted(player.sources.items(), key=lambda kv: -kv[1])
+    tip = "".join(f"<span>{_e(k)}<i>{v:.1f}</i></span>" for k, v in rows)
+    label = (f"{player.name}: sources range {lo:.1f} to {hi:.1f}, using {used:.1f} "
+             f"from {len(rows)} sources")
+    return (f'<span class="spread" tabindex="0" aria-label="{_e(label)}">'
+            '<svg aria-hidden="true">'
+            '<line class="track" x1="4%" x2="96%" y1="12" y2="12"/>'
+            f'<line class="range" x1="{x(lo):.1f}%" x2="{x(hi):.1f}%" y1="12" y2="12"/>'
+            f'<circle class="pick" cx="{x(used):.1f}%" cy="12" r="5.5"/>'
+            f'<text class="lohi" x="{x(lo):.1f}%" y="27" text-anchor="middle">{lo:.0f}</text>'
+            + (f'<text class="lohi" x="{x(hi):.1f}%" y="27" text-anchor="middle">{hi:.0f}</text>'
+               if x(hi) - x(lo) > 12 else "")
+            + f'</svg><span class="tip" role="tooltip"><b>{len(rows)} projections</b>{tip}</span></span>')
 
 
 def _when(moment: dt.datetime) -> str:
     hour = moment.hour % 12 or 12
-    return f"{moment:%a %b} {moment.day}, {hour}:{moment:%M %p} {moment:%Z}".strip()
+    return f"{moment:%A, %B} {moment.day} &middot; {hour}:{moment:%M %p} {moment:%Z}".strip()
 
 
 def _slug(text: str, index: int) -> str:
@@ -230,119 +363,96 @@ def _slug(text: str, index: int) -> str:
     return f"l{index}-{base}"[:60]
 
 
+def _move_id(r: LeagueReport, m: Move) -> str:
+    return _e(f"{r.team.league_name}|{m.player.id}|{m.benched.id if m.benched else ''}")
+
+
+def _benched_text(m: Move) -> str:
+    if not m.benched:
+        return "into the empty slot"
+    b = m.benched
+    tag = " (bye)" if b.bye else f" ({b.status_label})" if b.status_label else ""
+    return f"instead of {_e(b.name)}{_e(tag)}"
+
+
 def _league(r: LeagueReport, anchor: str) -> str:
     t = r.team
-    state = "todo" if r.needs_changes else "ok"
-    chip = (f'<span class="chip todo">{len(r.start)} move{"s" if len(r.start) != 1 else ""}</span>'
-            if r.needs_changes else '<span class="chip ok">Set</span>')
+    moves = {m.player.id: m for m in r.start}
     best, now = r.best.total, t.current.total
-    scale = max(best, now, 1)
-    parts = [f'<section class="league {state}" id="{anchor}">',
-             '<div class="lhead"><div>',
-             f'<h2>{_e(t.league_name)}</h2><div class="team">{_e(t.team_name)}</div></div>',
-             f'<div class="chips"><span class="chip">{_e(t.platform)}</span>{chip}</div></div>']
-
+    n = len(r.start)
     if r.needs_changes:
-        parts.append(
-            f'<div class="score"><span class="now">{now:.1f}</span><span class="arrow">&rarr;</span>'
-            f'<span class="best">{best:.1f}</span><span class="gain">+{r.gain:.1f} pts</span></div>'
-            f'<div class="bar" role="img" aria-label="Projected {now:.1f} now, {best:.1f} with changes">'
-            f'<i class="add" style="width:{best / scale * 100:.1f}%"></i>'
-            f'<i style="width:{now / scale * 100:.1f}%"></i></div>')
-        parts.append('<ul class="moves">')
-        for m in r.start:
-            player, benched = m
-            close = '<span class="flag close">close call</span>' if m.close_call else ""
-            out = (f'<span class="tag">SIT</span><span>{_player_cell(benched)}</span>'
-                   f'<span class="proj">{benched.effective_projection:.1f} proj</span>{_sources(benched)}'
-                   if benched else '<span class="tag">FILLS</span><span class="name">Empty slot</span>')
-            parts.append(
-                '<li class="move">'
-                f'<div class="in"><span class="tag">START</span><span>{_player_cell(player)}</span>'
-                f'<span class="proj">{player.effective_projection:.1f} proj</span>{_sources(player)}</div>'
-                '<span class="arrow">over</span>'
-                f'<div class="out">{out}</div>'
-                f'<span class="delta">+{m.gain:.1f}{close}</span></li>')
-        parts.append('</ul>')
+        cap = f'<b>+{r.gain:.1f}</b> if you make {n} move{"s" if n != 1 else ""}'
+        verdict = (f'<p class="verdict">{n} move{"s" if n != 1 else ""} to make: '
+                   'new starters are marked <span class="badge-in">IN</span></p>')
+        shown = best
     else:
-        parts.append(f'<div class="score"><span class="best">{now:.1f}</span>'
-                     '<span class="now">projected</span></div>')
-        parts.append('<p class="good">Your lineup is already the best one. No changes needed.</p>')
+        cap = "projected, already your best lineup"
+        verdict = '<p class="verdict ok">Your lineup is already the best one. Nothing to change.</p>'
+        shown = now
+    parts = [f'<section class="league" id="{anchor}" aria-labelledby="{anchor}-h">',
+             '<div class="lhead"><div>',
+             f'<h3 id="{anchor}-h">{_e(t.league_name)}</h3>',
+             f'<div class="team"><b>{_e(t.team_name)}</b> &middot; {_e(t.platform)}</div></div>',
+             f'<div class="total"><span class="big">{shown:.1f}</span><span class="cap">{cap}</span></div></div>',
+             verdict]
 
     if r.alerts:
-        parts.append('<ul class="alerts">' + "".join(
+        parts.append('<ul class="notes">' + "".join(
             f'<li class="{a.level}">{_e(a.text)}</li>' for a in r.alerts) + '</ul>')
 
-    if r.waivers or t.waiver_note:
-        note = f' <span class="wnote">{_e(t.waiver_note)}</span>' if t.waiver_note else ""
-        items = "".join(_waiver_item(w) for w in r.waivers)
-        body = f'<ul>{items}</ul>' if items else '<p class="note">No pickups worth making right now.</p>'
-        parts.append(f'<div class="plan inset"><h3>Waiver wire{note}</h3>{body}</div>')
-
-    new_ids = {m.player.id for m in r.start}
+    starters = [p for p in r.best.players if p is not None]
+    highs = [p.source_range[1] for p in starters if p.source_range] + [p.effective_projection for p in starters]
+    scale = max(10.0, math.ceil(max(highs, default=10) / 5) * 5)
     rows = []
     for slot, player in zip(r.best.slots, r.best.players):
         label = SLOT_LABEL.get(slot, slot)
         if player is None:
-            rows.append(f'<tr><td class="slot">{_e(label)}</td><td>Empty</td><td class="num">-</td></tr>')
-        else:
-            cls = ' class="new"' if player.id in new_ids else ""
-            rows.append(f'<tr{cls}><td class="slot">{_e(label)}</td><td>{_player_cell(player)}</td>'
-                        f'<td class="num">{player.effective_projection:.1f}{_sources(player)}</td></tr>')
-    parts.append('<details><summary>Best lineup</summary><div class="tablewrap"><table>'
-                 + "".join(rows) + '</table></div></details>')
+            rows.append(f'<li class="row"><span class="slot">{_e(label)}</span>'
+                        '<div class="who"><span class="name">Empty</span>'
+                        '<span class="game">Nobody on your roster can fill this slot</span></div>'
+                        '<span class="nospread"></span><span class="pts zero">0.0</span></li>')
+            continue
+        m = moves.get(player.id)
+        was = ""
+        if m:
+            if m.benched:
+                b = m.benched
+                tag = " · bye" if b.bye else f" · {b.status_label}" if b.status_label else ""
+                was = (f'<span class="was">instead of <s>{_e(b.name)}</s>{_e(tag)} '
+                       f'&middot; <span class="num">{b.effective_projection:.1f}</span></span>')
+            else:
+                was = '<span class="was">fills an empty slot</span>'
+        badge = '<span class="badge-in">IN</span>' if m else ""
+        pts = player.effective_projection
+        rows.append(f'<li class="row{" in" if m else ""}"><span class="slot">{_e(label)}</span>'
+                    f'<div class="who">{badge}{_name(player)}{_game(player)}{was}</div>'
+                    f'{_spread(player, scale)}'
+                    f'<span class="pts{" zero" if pts == 0 else ""}">{pts:.1f}</span></li>')
+    parts.append('<div><div class="card-key" aria-hidden="true"><span>Slot</span><span>Starter</span>'
+                 '<span>Source range</span><span>Proj</span></div>'
+                 f'<ul class="rows" aria-label="Best lineup">{"".join(rows)}</ul></div>')
+
+    best_ids = {p.id for p in starters}
+    bench = sorted((p for p in t.roster if p.id not in best_ids), key=lambda p: -p.effective_projection)
+    if bench:
+        items = "".join(f'<li><span>{_name(p)}</span><span class="num">{p.effective_projection:.1f}</span></li>'
+                        for p in bench)
+        parts.append(f'<details class="more"><summary>Bench ({len(bench)})</summary>'
+                     f'<ul class="bench">{items}</ul></details>')
+
+    if r.waivers or t.waiver_note:
+        note = f' <span class="wnote">&middot; {_e(t.waiver_note)}</span>' if t.waiver_note else ""
+        items = "".join(_wire_item(w) for w in r.waivers)
+        body = f'<ul class="wire">{items}</ul>' if items else '<p class="wnote">No pickups worth making right now.</p>'
+        parts.append(f'<details class="more"{" open" if r.waivers else ""}>'
+                     f'<summary>Waiver wire{note}</summary>{body}</details>')
     parts.append('</section>')
     return "".join(parts)
 
 
-def _plan(reports: list[LeagueReport], anchors: dict[int, str]) -> str:
-    """The manager's brief: every move across leagues, soonest deadline first."""
-    plan = game_plan(reports)
-    link = lambda r: (f'<a class="league-link" href="#{anchors[id(r)]}">'  # noqa: E731
-                      f'{_e(r.team.league_name)} &middot; {_e(r.team.platform)}</a>')
-    parts = ['<section class="plan" aria-labelledby="plan-h"><h2 id="plan-h">Game plan</h2>']
-    if not plan.moves and not plan.pickups:
-        parts.append('<p class="good">Every lineup is already set. Nothing to do right now.</p>')
-    current = None
-    for r, m in plan.moves:
-        label = deadline_label(m.deadline)
-        if label != current:
-            if current is not None:
-                parts.append("</ol>")
-            parts.append(f"<h3>{_e(label)}</h3><ol>")
-            current = label
-        over = (f' over {_e(m.benched.name)}{" (BYE)" if m.benched.bye else ""}'
-                f'{" (" + _e(m.benched.status_label) + ")" if m.benched.status_label and not m.benched.bye else ""}'
-                if m.benched else " into the empty slot")
-        game = f' <span class="game">{_e(m.player.matchup or "")} &middot; {_e(fmt_time(m.player.kickoff))}</span>' \
-            if m.player.kickoff else ""
-        close = '<span class="flag close">close call</span>' if m.close_call else ""
-        parts.append(f'<li class="pitem"><div class="what">{link(r)}Start <b>{_e(m.player.name)}</b> '
-                     f'({_e(m.player.position)}){over}{game}</div>'
-                     f'<span class="delta">+{m.gain:.1f}{close}</span></li>')
-    if current is not None:
-        parts.append("</ol>")
-    if plan.pickups:
-        parts.append('<h3>Waiver pickups needed</h3><ul>' + "".join(
-            f'<li class="pitem bad"><div class="what">{link(r)}{_e(a.text)}</div></li>'
-            for r, a in plan.pickups) + "</ul>")
-    if plan.waivers:
-        parts.append('<h3>Waiver wire</h3><ul>' + "".join(
-            _waiver_item(w, link(r), r.team.waiver_note) for r, w in plan.waivers) + "</ul>")
-    if plan.watch:
-        parts.append('<h3 class="calm">Watch list</h3><ul>' + "".join(
-            f'<li class="pitem warn"><div class="what">{link(r)}{_e(a.text)}</div></li>'
-            for r, a in plan.watch) + "</ul>")
-    if plan.all_set:
-        names = ", ".join(_e(r.team.league_name) for r in plan.all_set)
-        parts.append(f'<p class="allset"><b>All set:</b> {names}</p>')
-    parts.append("</section>")
-    return "".join(parts)
-
-
-def _waiver_item(w, league_link: str = "", note: str | None = None) -> str:
+def _facts(w, note: str | None = None) -> list[str]:
     add = w.add
-    facts = [f"{add.effective_projection:.1f} proj this week", f"{add.next_projection:.1f} next week"]
+    facts = [f"{add.effective_projection:.1f} this week", f"{add.next_projection:.1f} next"]
     if add.trending:
         facts.append(f"{add.trending:,} adds in 24h")
     if add.owned_pct is not None:
@@ -351,16 +461,81 @@ def _waiver_item(w, league_link: str = "", note: str | None = None) -> str:
         facts.append(add.waiver_status.lower())
     if note:
         facts.append(note)
-    game = f", {add.matchup}" if add.matchup else (", BYE" if add.bye else "")
-    drop = (f' &middot; drop <b>{_e(w.drop.name)}</b> ({_e(w.drop.position)})' if w.drop else "")
-    return (f'<li class="pitem waiver{" tough" if w.tough else ""}"><div class="what">{league_link}'
-            f'Add <b>{_e(add.name)}</b> ({_e(add.position)}, {_e(add.team or "FA")}{_e(game)}){drop}'
+    return facts
+
+
+def _wire_gain(w) -> tuple[str, str]:
+    """(+points, what they're for): this week's lineup gain, or two-week depth when that's all it is."""
+    if w.week_gain > 0.05:
+        return f"+{w.week_gain:.1f}", "this week"
+    return f"+{max(w.two_week_gain, 0):.1f}", "over 2 weeks"
+
+
+def _wire_item(w) -> str:
+    add = w.add
+    game = f", {add.matchup}" if add.matchup else (", bye" if add.bye else "")
+    drop = f' &middot; drop <b>{_e(w.drop.name)}</b>' if w.drop else ""
+    return (f'<li class="{"tough" if w.tough else ""}"><span>Add <b>{_e(add.name)}</b> '
+            f'({_e(add.position)}, {_e(add.team or "FA")}{_e(game)}){drop}</span>'
+            f'<span class="gain">{_wire_gain(w)[0]} <small class="wnote">{_wire_gain(w)[1]}</small></span>'
             f'<span class="why">{_e(w.reason)}</span>'
-            f'<span class="detail">{_e(" · ".join(facts))}</span></div>'
-            f'<span class="delta">+{max(w.week_gain, 0):.1f}</span></li>')
+            f'<span class="facts">{_e(" · ".join(_facts(w)))}</span></li>')
 
 
-def _updates(generated: dt.datetime, next_updates: list[dt.datetime], run_url: str | None) -> str:
+def _plan(reports: list[LeagueReport], anchors: dict[int, str]) -> str:
+    """Everything to do across leagues: moves by deadline, then pickups, watch items, waivers."""
+    plan = game_plan(reports)
+    link = lambda r: f'<a class="lg" href="#{anchors[id(r)]}">{_e(r.team.league_name)}</a>'  # noqa: E731
+    out = ['<h2 class="sec" id="todo">Your to-do list</h2>']
+    if not plan.moves and not plan.pickups:
+        out.append('<p class="allset"><b>Every lineup is already set.</b> Nothing to do right now.</p>')
+    current = None
+    for r, m in plan.moves:
+        label = deadline_label(m.deadline)
+        if label != current:
+            if current is not None:
+                out.append("</ul>")
+            out.append(f'<h3 class="when">{_e(label)}</h3><ul class="tasks">')
+            current = label
+        game = (f'<span class="why">{_e(m.player.matchup or "")} &middot; {_e(fmt_time(m.player.kickoff))}</span>'
+                if m.player.kickoff else "")
+        close = '<span class="tag close">close call</span>' if m.close_call else ""
+        out.append(f'<li class="item"><input type="checkbox" data-done="{_move_id(r, m)}" '
+                   f'aria-label="Mark done: start {_e(m.player.name)}">'
+                   f'<div class="what">{link(r)}Start <b>{_e(m.player.name)}</b> ({_e(m.player.position)}) '
+                   f'{_benched_text(m)}{close}{game}</div>'
+                   f'<span class="gain">+{m.gain:.1f}<small>points</small></span></li>')
+    if current is not None:
+        out.append("</ul>")
+    if plan.pickups:
+        out.append('<h3 class="when">Pick up someone</h3><ul class="tasks">' + "".join(
+            f'<li class="item bad"><span class="icon" aria-hidden="true">!</span>'
+            f'<div class="what">{link(r)}{_e(a.text)}</div></li>' for r, a in plan.pickups) + "</ul>")
+    if plan.watch:
+        out.append('<h3 class="when">Keep an eye on</h3><ul class="tasks">' + "".join(
+            f'<li class="item warn"><span class="icon" aria-hidden="true">?</span>'
+            f'<div class="what">{link(r)}{_e(a.text)}</div></li>' for r, a in plan.watch) + "</ul>")
+    if plan.all_set:
+        names = ", ".join(_e(r.team.league_name) for r in plan.all_set)
+        out.append(f'<p class="allset"><b>Already set:</b> {names}</p>')
+    if plan.waivers:
+        out.append('<h2 class="sec">Waiver ideas</h2><ul class="tasks">')
+        for i, (r, w) in enumerate(plan.waivers):
+            if i == WAIVERS_SHOWN:
+                out.append(f'</ul><details class="more"><summary>{len(plan.waivers) - i} more waiver '
+                           f'idea{"s" if len(plan.waivers) - i != 1 else ""}</summary><ul class="tasks">')
+            add = w.add
+            drop = f", drop <b>{_e(w.drop.name)}</b>" if w.drop else ""
+            out.append(f'<li class="item add{" tough" if w.tough else ""}"><span class="icon" aria-hidden="true">+</span>'
+                       f'<div class="what">{link(r)}Add <b>{_e(add.name)}</b> ({_e(add.position)}, '
+                       f'{_e(add.team or "FA")}){drop}<span class="why">{_e(w.reason)}</span>'
+                       f'<span class="why num">{_e(" · ".join(_facts(w, r.team.waiver_note)))}</span></div>'
+                       f'<span class="gain">{_wire_gain(w)[0]}<small>{_wire_gain(w)[1]}</small></span></li>')
+        out.append("</ul></details>" if len(plan.waivers) > WAIVERS_SHOWN else "</ul>")
+    return "".join(out)
+
+
+def _updates(next_updates: list[dt.datetime], run_url: str | None) -> str:
     """When the page refreshes next, plus a warning if it's overdue."""
     if not next_updates:
         return ""
@@ -374,10 +549,9 @@ def _updates(generated: dt.datetime, next_updates: list[dt.datetime], run_url: s
         f'<ul>{times}</ul>'
         '<p>Updates every morning around 9 AM, Tuesday night before waivers run, every 30 minutes '
         'on Sundays (about 9 AM to 8 PM), and every 30 minutes before Thursday and Monday night '
-        'games. Each update pulls fresh '
-        'projections, injuries and rosters. GitHub sometimes starts them a few minutes late.'
-        f'{now_link}</p></details>'
-        f'<div class="stale" id="stale" hidden>This page was due to update at '
+        'games. Injuries and rosters refresh every time; projection sites about twice a day. '
+        f'GitHub sometimes starts updates a few minutes late.{now_link}</p></details>'
+        f'<div class="box stale" id="stale" hidden>This page was due to update at '
         f'{_e(fmt_time(next_updates[0]))} and hasn\'t yet, so the info below may be out of date. '
         'Updates sometimes run late; check back in a few minutes'
         f'{f""" or <a href="{_e(run_url)}" target="_blank" rel="noopener">update it now</a>""" if run_url else ""}.</div>'
@@ -387,10 +561,28 @@ def _updates(generated: dt.datetime, next_updates: list[dt.datetime], run_url: s
 
 
 LOCK_BUTTON = (
-    '<button type="button" class="lockbtn" '
+    '<button type="button" class="btn" '
     "onclick=\"try{localStorage.removeItem('ffman-key')}catch(e){};location.reload()\">"
     "Log out</button>"
 )
+
+
+def _lede(ordered: list[LeagueReport]) -> str:
+    todo = [r for r in ordered if r.needs_changes]
+    moves = sum(len(r.start) for r in todo)
+    gain = sum(r.gain for r in todo)
+    pickups = sum(1 for r in ordered for a in r.alerts if a.level == "bad")
+    n = len(ordered)
+    if not ordered:
+        return ""
+    if moves:
+        text = (f'You have <b>{moves} move{"s" if moves != 1 else ""}</b> to make across {n} '
+                f'league{"s" if n != 1 else ""}, worth <span class="plus num">+{gain:.1f}</span> points.')
+    else:
+        text = f'All {n} lineup{"s are" if n != 1 else " is"} set. Nothing to move.'
+    if pickups:
+        text += f' <b>{pickups} spot{"s" if pickups != 1 else ""}</b> need{"s" if pickups == 1 else ""} a pickup.'
+    return f'<p class="lede">{text}</p>'
 
 
 def render_dashboard(reports: list[LeagueReport], week: int | None, errors: list[str],
@@ -400,61 +592,70 @@ def render_dashboard(reports: list[LeagueReport], week: int | None, errors: list
     """The page body: <title>, styles and content (no <html>/<body> wrapper)."""
     generated = generated or dt.datetime.now().astimezone()
     ordered = sorted(reports, key=lambda r: (not r.needs_changes, -r.gain))
-    todo = [r for r in ordered if r.needs_changes]
-    gain = sum(r.gain for r in todo)
-    moves = sum(len(r.start) for r in todo)
-    waiver_ideas = sum(len(r.waivers) for r in ordered)
+    anchors = [_slug(r.team.league_name, i) for i, r in enumerate(ordered)]
     locked = any(p.locked for r in ordered for p in r.team.roster)
 
-    out = ["<title>ffman Lineups</title>", STYLE, '<main class="wrap">', "<header><div>",
-           f'<h1>Lineups <span>Week {week}</span></h1>' if week else "<h1>Lineups</h1>",
-           f'<div class="meta">Projections, injuries and rosters as of {_e(_when(generated))}'
-           + (f' &middot; next update about {_e(fmt_time(next_updates[0]))}' if next_updates else "")
-           + '</div></div>']
+    tools = ['<button type="button" class="btn" id="theme">Theme: auto</button>']
     if week_picker:
         options = "".join(f'<option value="{w}"{" selected" if w == week else ""}>Week {w}</option>'
                           for w in range(1, 19))
-        out.append('<form class="weekform" method="get"><label for="week">Show</label>'
-                   f'<select id="week" name="week">{options}</select>'
-                   '<button type="submit">Refresh</button></form>')
+        tools.insert(0, '<form method="get" class="tools"><label class="kicker" for="week">Week</label>'
+                        f'<select class="btn" id="week" name="week">{options}</select>'
+                        '<button type="submit" class="btn primary">Refresh</button></form>')
     if logout:
-        out.append(LOCK_BUTTON)
-    out.append("</header>")
+        tools.append(LOCK_BUTTON)
 
-    out.append('<div class="strip">'
-               f'<div class="stat"><small>Leagues</small><b>{len(ordered)}</b></div>'
-               f'<div class="stat"><small>Moves to make</small><b>{moves}</b></div>'
-               f'<div class="stat"><small>Points to gain</small><b>+{gain:.1f}</b></div>'
-               f'<div class="stat"><small>Waiver ideas</small><b>{waiver_ideas}</b></div></div>')
-    out.append(_updates(generated, next_updates or [], run_url))
+    out = ["<title>ffman Lineups</title>", STYLE, '<div class="wrap">',
+           '<header class="mast"><div class="top"><span class="kicker">ffman &middot; lineup card</span>'
+           f'<div class="tools">{"".join(tools)}</div></div>',
+           f'<h1>Week <em>{week}</em></h1>' if week else "<h1>Lineups</h1>",
+           f'<div class="dateline">{_when(generated)}'
+           + (f' &middot; next update about {_e(fmt_time(next_updates[0]))}' if next_updates else "")
+           + '</div></header>']
+
+    if ordered:
+        links = "".join(
+            f'<a href="#{a}"><span class="dot{" todo" if r.needs_changes else ""}'
+            f'{" bad" if any(x.level == "bad" for x in r.alerts) else ""}" aria-hidden="true"></span>'
+            f'{_e(r.team.league_name)}'
+            + (f' <span class="num">&middot; {len(r.start)} move{"s" if len(r.start) != 1 else ""}</span>'
+               if r.needs_changes else "")
+            + '</a>' for r, a in zip(ordered, anchors))
+        out.append(f'<nav class="jump" aria-label="Leagues"><a href="#todo">To-do</a>{links}</nav>')
+
+    out.append(_lede(ordered))
     note = "Suggestions only. Nothing has been changed in any of your leagues."
     if locked:
         note += " Players whose games have started are locked and left where they are."
-    out.append(f'<p class="note">{note}</p>')
-
-    anchors = [_slug(r.team.league_name, i) for i, r in enumerate(ordered)]
+    out.append(f'<p class="sub">{note}</p>')
+    out.append(_updates(next_updates or [], run_url))
     if errors:
-        out.append('<div class="problems"><h2>Couldn\'t load</h2><ul>'
+        out.append('<div class="box problems"><h2>Couldn\'t load</h2><ul>'
                    + "".join(f"<li>{_e(e)}</li>" for e in errors) + "</ul></div>")
     if ordered:
         out.append(_plan(ordered, {id(r): a for r, a in zip(ordered, anchors)}))
-        out.append('<h2 class="section-label">League by league</h2>')
+        out.append('<h2 class="sec">League by league</h2>')
     out.extend(_league(r, a) for r, a in zip(ordered, anchors))
     if not ordered and not errors:
-        out.append('<p class="note">No leagues found. Check your config.</p>')
-    sources = (_e(sources_note) + " Each site's PPR number is shifted onto your league's scoring, "
-               "then averaged (with 5+ numbers, the highest and lowest are dropped). "
-               if sources_note else "Projections: Sleeper (scored with each league's settings) and ESPN. ")
-    out.append(f'<footer>{sources}'
-               f'Game times: ESPN NFL schedule, shown in {_e(generated.strftime("%Z") or "local time")}. '
-               'Check injury news before kickoff.</footer></main>')
+        out.append('<p class="sub">No leagues found. Check your config.</p>')
+
+    how = ("Each projection is your league site's number averaged with the free sources below, after "
+           "shifting each source onto your league's scoring (with 5 or more numbers the highest and lowest "
+           "are dropped). On each row the bar runs from the lowest to the highest source and the dot is the "
+           "number used; hover or tap it to see every source.")
+    sources = _e(sources_note) if sources_note else "Projections: Sleeper (scored with each league's settings) and ESPN."
+    out.append(f'<footer><p>{sources}</p><p>{how if sources_note else ""}</p>'
+               f'<p>Game times from ESPN\'s NFL schedule, shown in {_e(generated.strftime("%Z") or "local time")}. '
+               'Always check injury news before kickoff.</p></footer></div>')
+    out.append(SCRIPT)
     return "\n".join(out)
 
 
-def full_page(body: str) -> str:
+def full_page(body: str, week: int | None = None) -> str:
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
-            f"</head><body>{body}</body></html>")
+            '<meta name="color-scheme" content="light dark">'
+            f'</head><body data-week="{week or ""}">{body}</body></html>')
 
 
 def serve(build, host: str = "127.0.0.1", port: int = 8000, cache_seconds: int = 300) -> None:
@@ -473,7 +674,7 @@ def serve(build, host: str = "127.0.0.1", port: int = 8000, cache_seconds: int =
             if not hit or time.time() - hit[0] > cache_seconds:
                 reports, shown, errors, note = build(week)
                 page = full_page(render_dashboard(reports, shown, errors, week_picker=True,
-                                                  sources_note=note))
+                                                  sources_note=note), shown)
                 hit = cache[week] = (time.time(), page.encode())
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")

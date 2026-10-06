@@ -133,7 +133,7 @@ def cmd_run(args) -> int:
                 run_url = f"https://github.com/{repo}/actions/workflows/site.yml"
         page = web.full_page(web.render_dashboard(reports, shown_week, errors, logout=bool(password),
                                                   next_updates=next_updates, run_url=run_url,
-                                                  sources_note=note))
+                                                  sources_note=note), shown_week)
         if user and password:
             from .lock import login_page
             page = login_page(page, user, password)
@@ -157,6 +157,8 @@ def cmd_run(args) -> int:
               f"{sum(len(r.waivers) for r in reports)} waiver ideas"
               f"{f' ({no_waivers} leagues without waiver data)' if no_waivers else ''}, "
               f"{len(errors)} problems.", file=sys.stderr)
+        if note:  # source names and failure reasons only, safe for public logs
+            print(note, file=sys.stderr)
     return 1 if errors and not reports else 0
 
 
