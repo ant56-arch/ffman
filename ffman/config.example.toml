@@ -27,6 +27,14 @@ team_id = 3
 # league_id = 654321
 # team_id = 7
 
+# --- Projection sources (all free, no accounts) ---
+# Each league's own projections are averaged with ESPN's public projections and the
+# Draft Sharks, CBS Sports, Fantasy Football Calculator, FantasyData, FFToday and StartWho
+# weekly projections. A site that's down or still on last week is skipped.
+[projections]
+sources = "all"        # or "none", or a list like ["espn", "draftsharks", "cbs"]
+refresh_hours = 12     # how often to re-read the sites (data is cached between runs)
+
 # --- Optional notifications (used with `ffman --notify`) ---
 [notify]
 # ntfy_topic = "pick-something-hard-to-guess"   # install the ntfy app and subscribe

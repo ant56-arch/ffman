@@ -123,6 +123,8 @@ tr.new td { background: var(--turf-soft); }
 .problems h2 { font: 800 18px var(--display); text-transform: uppercase; margin: 0 0 4px; color: var(--bad); }
 .problems ul { margin: 0; padding-left: 18px; }
 footer { color: var(--muted); font-size: 12px; }
+.range { display: block; font: 500 11px var(--mono); color: var(--muted); cursor: help;
+  text-decoration: underline dotted; text-underline-offset: 2px; white-space: nowrap; }
 .game { display: block; font: 500 12px var(--mono); color: var(--muted); margin-top: 1px; }
 .flag.lock { background: var(--bg); color: var(--muted); border: 1px solid var(--line); }
 .flag.close { background: var(--bg); color: var(--muted); border: 1px dashed var(--line); }
@@ -200,6 +202,17 @@ def _game(player: Player) -> str:
     return f'<span class="game">{_e(player.matchup)} &middot; {_e(when)}</span>'
 
 
+def _sources(player: Player) -> str:
+    """'14.1-20.9 · 6 sources' with each source's number in the tooltip, or ''."""
+    spread = player.source_range
+    if not spread:
+        return ""
+    detail = [f"Platform {player.platform_projection:.1f}"] if player.platform_projection is not None else []
+    detail += [f"{k} {v:.1f}" for k, v in sorted(player.sources.items(), key=lambda kv: -kv[1])]
+    return (f'<span class="range" title="{_e(" · ".join(detail))}">'
+            f'{spread[0]:.1f}&ndash;{spread[1]:.1f} &middot; {len(detail)} sources</span>')
+
+
 def _player_cell(player: Player, game: bool = True) -> str:
     team = f' <span class="proj">{_e(player.team)}</span>' if player.team else ""
     lock = '<span class="flag lock">LOCKED</span>' if player.locked else ""
@@ -241,12 +254,12 @@ def _league(r: LeagueReport, anchor: str) -> str:
             player, benched = m
             close = '<span class="flag close">close call</span>' if m.close_call else ""
             out = (f'<span class="tag">SIT</span><span>{_player_cell(benched)}</span>'
-                   f'<span class="proj">{benched.effective_projection:.1f} proj</span>'
+                   f'<span class="proj">{benched.effective_projection:.1f} proj</span>{_sources(benched)}'
                    if benched else '<span class="tag">FILLS</span><span class="name">Empty slot</span>')
             parts.append(
                 '<li class="move">'
                 f'<div class="in"><span class="tag">START</span><span>{_player_cell(player)}</span>'
-                f'<span class="proj">{player.effective_projection:.1f} proj</span></div>'
+                f'<span class="proj">{player.effective_projection:.1f} proj</span>{_sources(player)}</div>'
                 '<span class="arrow">over</span>'
                 f'<div class="out">{out}</div>'
                 f'<span class="delta">+{m.gain:.1f}{close}</span></li>')
@@ -275,7 +288,7 @@ def _league(r: LeagueReport, anchor: str) -> str:
         else:
             cls = ' class="new"' if player.id in new_ids else ""
             rows.append(f'<tr{cls}><td class="slot">{_e(label)}</td><td>{_player_cell(player)}</td>'
-                        f'<td class="num">{player.effective_projection:.1f}</td></tr>')
+                        f'<td class="num">{player.effective_projection:.1f}{_sources(player)}</td></tr>')
     parts.append('<details><summary>Best lineup</summary><div class="tablewrap"><table>'
                  + "".join(rows) + '</table></div></details>')
     parts.append('</section>')
@@ -383,7 +396,7 @@ LOCK_BUTTON = (
 def render_dashboard(reports: list[LeagueReport], week: int | None, errors: list[str],
                      generated: dt.datetime | None = None, week_picker: bool = False,
                      logout: bool = False, next_updates: list[dt.datetime] | None = None,
-                     run_url: str | None = None) -> str:
+                     run_url: str | None = None, sources_note: str | None = None) -> str:
     """The page body: <title>, styles and content (no <html>/<body> wrapper)."""
     generated = generated or dt.datetime.now().astimezone()
     ordered = sorted(reports, key=lambda r: (not r.needs_changes, -r.gain))
@@ -429,7 +442,10 @@ def render_dashboard(reports: list[LeagueReport], week: int | None, errors: list
     out.extend(_league(r, a) for r, a in zip(ordered, anchors))
     if not ordered and not errors:
         out.append('<p class="note">No leagues found. Check your config.</p>')
-    out.append('<footer>Projections: Sleeper (scored with each league\'s settings) and ESPN. '
+    sources = (_e(sources_note) + " Each site's PPR number is shifted onto your league's scoring, "
+               "then averaged (with 5+ numbers, the highest and lowest are dropped). "
+               if sources_note else "Projections: Sleeper (scored with each league's settings) and ESPN. ")
+    out.append(f'<footer>{sources}'
                f'Game times: ESPN NFL schedule, shown in {_e(generated.strftime("%Z") or "local time")}. '
                'Check injury news before kickoff.</footer></main>')
     return "\n".join(out)
@@ -442,7 +458,7 @@ def full_page(body: str) -> str:
 
 
 def serve(build, host: str = "127.0.0.1", port: int = 8000, cache_seconds: int = 300) -> None:
-    """Run the local website. `build(week)` returns (reports, week, errors)."""
+    """Run the local website. `build(week)` returns (reports, week, errors, sources note)."""
     cache: dict = {}
 
     class Handler(BaseHTTPRequestHandler):
@@ -455,8 +471,9 @@ def serve(build, host: str = "127.0.0.1", port: int = 8000, cache_seconds: int =
             week = int(query["week"][0]) if query.get("week", [""])[0].isdigit() else None
             hit = cache.get(week)
             if not hit or time.time() - hit[0] > cache_seconds:
-                reports, shown, errors = build(week)
-                page = full_page(render_dashboard(reports, shown, errors, week_picker=True))
+                reports, shown, errors, note = build(week)
+                page = full_page(render_dashboard(reports, shown, errors, week_picker=True,
+                                                  sources_note=note))
                 hit = cache[week] = (time.time(), page.encode())
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")

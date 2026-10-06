@@ -59,6 +59,14 @@ jobs:
             echo "::error::Add an FFMAN_CONFIG repository secret with your config.toml contents (see README)."; exit 1
           fi
       - run: pip install cryptography
+      # Projection-site data (public numbers only, no rosters) carries over between runs, so
+      # the sites are read about twice a day instead of on every 30-minute Sunday update.
+      - name: Reuse projection data from earlier runs
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ffman
+          key: ffman-data-${{ github.run_id }}
+          restore-keys: ffman-data-
       - name: Build lineup recommendations
         env:
           FFMAN_CONFIG: ${{ secrets.FFMAN_CONFIG }}

@@ -68,6 +68,16 @@ def score(stats: dict, scoring: dict) -> float:
     return round(total, 2)
 
 
+# The scoring the projection sites publish (plain PPR). League scoring is compared with
+# this to shift their numbers onto the league's rules (TE premium, 6-pt pass TDs, half PPR...).
+PPR_OVERRIDES = {"rec": 1.0, "pass_td": 4.0, "pass_yd": 0.04,
+                 "bonus_rec_te": 0.0, "bonus_rec_rb": 0.0, "bonus_rec_wr": 0.0}
+
+
+def ppr_scoring(scoring: dict) -> dict:
+    return {**scoring, **PPR_OVERRIDES}
+
+
 def load_trending() -> dict[str, int]:
     """{player_id: adds in the last 24h} for the most-added players."""
     try:
@@ -95,6 +105,7 @@ def _player(pid: str, players: dict, projections: dict, statuses: dict, playing:
         team=team,
         eligible=eligible_slots(positions),
         projection=score(projections.get(pid, {}), scoring),
+        ppr_projection=score(projections.get(pid, {}), ppr_scoring(scoring)),
         injury_status=statuses[pid] if pid in statuses else info.get("injury_status"),
         bye=bool(playing) and team is not None and team not in playing,
         next_projection=score(next_projections.get(pid, {}), scoring) if next_projections else 0.0,

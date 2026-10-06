@@ -34,6 +34,26 @@ def get_json(url: str, params: dict | None = None, cookies: dict | None = None, 
         raise FetchError(f"GET {url} failed: {exc}") from exc
 
 
+# Projection sites serve their normal pages to browsers; some turn away unknown clients.
+BROWSER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                 "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
+
+
+def get_text(url: str, timeout: int = 20, headers: dict | None = None) -> str:
+    """GET a web page as text (for the projection sites in consensus.py)."""
+    headers = {"User-Agent": BROWSER_AGENT, "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
+               "Accept-Language": "en-US,en;q=0.9", **(headers or {})}
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            return response.read().decode(charset, errors="replace")
+    except urllib.error.HTTPError as exc:
+        raise FetchError(f"GET {url} failed: HTTP {exc.code}") from exc
+    except (urllib.error.URLError, TimeoutError, UnicodeDecodeError) as exc:
+        raise FetchError(f"GET {url} failed: {exc}") from exc
+
+
 def cache_dir() -> Path:
     path = Path(os.environ.get("FFMAN_CACHE_DIR", Path.home() / ".cache" / "ffman"))
     path.mkdir(parents=True, exist_ok=True)

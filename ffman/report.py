@@ -6,6 +6,7 @@ import datetime as dt
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
+from .consensus import disagreement
 from .models import RISKY_STATUSES, Lineup, Player, Team, fmt_time
 from .optimizer import optimal_lineup
 from .waivers import Pickup, suggest
@@ -94,10 +95,15 @@ def analyze(team: Team, min_gain: float = 0.5) -> LeagueReport:
         elif player.bye:
             alerts.append(Alert("bad", f"{player.label()} is on bye and is your only {slot} option - pick up a {slot}.", player))
         elif player.effective_projection == 0:
-            alerts.append(Alert("bad", f"{player.label()} is projected 0 and is your best {slot} option - check waivers.", player))
+            others = (f" (other sources average {sum(player.sources.values()) / len(player.sources):.1f},"
+                      " so check the news)" if player.sources else "")
+            alerts.append(Alert("bad", f"{player.label()} is projected 0{others} and is your best {slot} option"
+                                       " - pick up a backup.", player))
         elif (player.injury_status or "").upper() in RISKY_STATUSES:
             when = f" before {fmt_time(player.kickoff)}" if player.kickoff else " before kickoff"
             alerts.append(Alert("warn", f"{player.label()} is {player.status_label} - check the inactive list{when}.", player))
+        elif spread := disagreement(player):
+            alerts.append(Alert("warn", f"Projections disagree on {player.label()} ({spread}) - check the news.", player))
     return LeagueReport(team, best, start, alerts, min_gain, suggest(team))
 
 
@@ -151,12 +157,15 @@ def _with_game(p: Player) -> str:
     return f"{p.label(True)}{f' ({game})' if game and not p.bye else ''}"
 
 
-def render(reports: list[LeagueReport], week: int | None = None) -> str:
+def render(reports: list[LeagueReport], week: int | None = None, sources_note: str | None = None) -> str:
     plan = game_plan(reports)
     lines = [f"# Lineup recommendations{f' - Week {week}' if week else ''}", ""]
     todo = [r for r in reports if r.needs_changes]
     lines.append(f"**{len(todo)} of {len(reports)} leagues have changes to make.** "
                  "Nothing has been changed for you - these are suggestions only.")
+    if sources_note:
+        lines.append("")
+        lines.append(f"_{sources_note}_")
     lines.append("")
     if plan.moves:
         lines.append("## Game plan")
@@ -212,8 +221,10 @@ def render_league(r: LeagueReport) -> list[str]:
         if player is None:
             lines.append(f"| {slot} | (empty) | | - |")
         else:
+            spread = player.source_range
+            rng = f" ({_pts(spread[0])}-{_pts(spread[1])})" if spread else ""
             lines.append(f"| {slot} | {player.label(True)} | {player.game_label() or ''} | "
-                         f"{_pts(player.effective_projection)} |")
+                         f"{_pts(player.effective_projection)}{rng} |")
     lines.append("")
     lines.append("</details>")
     lines.append("")

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ffman"
 version = "0.1.0"
-description = "Read-only fantasy football lineup advisor for Sleeper and ESPN leagues"
+description = "Read-only fantasy football lineup advisor for Sleeper and ESPN leagues, averaging free projection sources"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []

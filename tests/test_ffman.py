@@ -333,5 +333,143 @@ class EspnCookieTests(unittest.TestCase):
             self.assertEqual(espn.cookies_for({"swid": "{Z}"})["SWID"], "{Z}")
 
 
+# Trimmed copies of each site's real markup (October 2026).
+DS_PAGE = """<title>Week 5&nbsp;PPR QB Rankings 2026</title>
+<tbody data-player-row="" data-fantasy-position="QB" data-player-name="Josh Allen">
+<span class="player-details-group__team-name">BUF</span>
+<td class="ds-cell" data-value="20.9" data-attribute="consensusWeeklyPts"></td>
+<td class="ds-cell" data-value="22.7" data-attribute="weeklyPts"></td></tbody>
+<tbody data-player-row="" data-fantasy-position="DEF" data-player-name="Minnesota Vikings">
+<span class="player-details-group__team-name">MIN</span>
+<td class="ds-cell" data-value="9.3" data-attribute="weeklyPts"></td></tbody>"""
+CBS_PAGE = """<title>Week 5 Proj Fantasy Football Stats - QB Points</title><table><thead><tr>
+<th class="TableBase-headTh">Player</th><th class="TableBase-headTh">gp</th>
+<th class="TableBase-headTh"><a href="?sortcol=misc_fpts">fpts<span></span></a></th>
+<th class="TableBase-headTh"><a href="?sortcol=misc_fppg">fppg<span></span></a></th></tr></thead>
+<tbody><tr class="TableBase-bodyTr"><td class="TableBase-bodyTd"><span class="CellPlayerName--short">
+<a href="/nfl/players/1/">D. Prescott</a></span><span class="CellPlayerName--long"><span class="">
+<a href="/nfl/players/1/dak-prescott/fantasy/" class="">Dak Prescott</a>
+<span class="CellPlayerName-position">QB</span><span class="CellPlayerName-team">
+                            DAL
+                        </span></span></span></td><td class="TableBase-bodyTd">1</td>
+<td class="TableBase-bodyTd"> 25.8 </td><td class="TableBase-bodyTd"> 25.8 </td></tr></tbody></table>"""
+FFC_PAGE = """<h1>Fantasy Football Week 5 PPR Quarterback (QB) Rankings</h1><table><tbody>
+<tr>
+  <td>1.</td>
+  <td class="!text-left"><a href="/players/josh-allen">Josh Allen</a></td>
+  <td>BUF</td><td>QB</td><td class="hidden md:table-cell">7</td>
+  <td>30.1</td>
+</tr></tbody></table>"""
+FD_PAGE = """<title>Week 5 Fantasy Football Rankings | FantasyData</title><table><tbody>
+<tr class=""><td class="">1</td><td class="sticky"><a href="/nfl/jahmyr-gibbs-fantasy/23200">Jahmyr Gibbs</a></td>
+<td><a class="special" href="/nfl/detroit-lions-roster">DET</a></td><td><a href="#">ARI</a></td>
+<td class="">RB1</td><td class="sorted ">25.0</td></tr></tbody></table>"""
+FFT_PAGE = """<title>Quarterback Projections: 2026 Week 4 - FF Today</title><table><tr>
+<td class="bodycontent" align="center">&nbsp;</td>
+<td class="smallbody">&nbsp;<a href="https://www.fftoday.com/stats/players/16228/Josh_Allen?LeagueID=1">Josh Allen</a></td>
+<td class="smallbody">BUF</td><td class="smallbody">NE</td><td class="smallbody">22.0</td>
+<td class="smallbody" bgcolor="#e0e0e0">29.6</td>
+</tr></table>"""
+
+
+class ConsensusTests(unittest.TestCase):
+    def test_parsers_read_each_site(self):
+        from ffman import consensus as c
+        self.assertEqual(c.parse_draftsharks(DS_PAGE, 5),
+                         [c.Row("Josh Allen", "QB", "BUF", 22.7), c.Row("Minnesota Vikings", "DEF", "MIN", 9.3)])
+        self.assertEqual(c.parse_cbs(CBS_PAGE, 5, "QB"), [c.Row("Dak Prescott", "QB", "DAL", 25.8)])
+        self.assertEqual(c.parse_ffc(FFC_PAGE, 5, "QB"), [c.Row("Josh Allen", "QB", "BUF", 30.1)])
+        self.assertEqual(c.parse_fantasydata(FD_PAGE, 5), [c.Row("Jahmyr Gibbs", "RB", "DET", 25.0)])
+        self.assertEqual(c.parse_fftoday(FFT_PAGE, 4, "QB"), [c.Row("Josh Allen", "QB", "BUF", 29.6)])
+        sw = {"weekNumber": 5, "projections": [
+            {"playerName": "Josh Allen", "position": "QB", "team": "Buffalo Bills", "fantasyPoints": 23.1}]}
+        self.assertEqual(c.parse_startwho(sw, 5), [c.Row("Josh Allen", "QB", "Buffalo Bills", 23.1)])
+
+    def test_last_weeks_page_is_rejected(self):
+        from ffman import consensus as c
+        from ffman.http import FetchError
+        with self.assertRaises(FetchError):
+            c.parse_fftoday(FFT_PAGE, 5, "QB")  # FFToday hasn't posted week 5 yet
+        with self.assertRaises(FetchError):
+            c.parse_cbs(CBS_PAGE, 6, "QB")
+
+    def test_matching_names_teams_and_defenses(self):
+        from ffman import consensus as c
+        table = c.Table([c.Row("Marvin Harrison Jr.", "WR", "ARI", 9.0),
+                         c.Row("Cameron Ward", "QB", "TEN", 14.0),
+                         c.Row("Vikings D/ST", "D/ST", None, 6.7),
+                         c.Row("Las Vegas Raiders", "DST", "Las Vegas Raiders", 5.0)])
+        p = lambda name, pos, tm: Player("x", name, pos, tm)  # noqa: E731
+        self.assertEqual(table.lookup(p("Marvin Harrison", "WR", "ARI")), 9.0)
+        self.assertEqual(table.lookup(p("Cam Ward", "QB", "TEN")), 14.0)  # last name + team
+        self.assertEqual(table.lookup(p("Minnesota Vikings", "DEF", "MIN")), 6.7)
+        self.assertEqual(table.lookup(p("Las Vegas Raiders", "DEF", "LV")), 5.0)
+        self.assertIsNone(table.lookup(p("Cam Ward", "QB", "NYG")))
+
+    def _data(self, *tables):
+        from ffman import consensus as c
+        return c.Consensus({label: c.Table(rows) for label, rows in tables}, {}, 0)
+
+    def test_sources_are_shifted_to_league_scoring_then_trimmed(self):
+        from ffman import consensus as c
+        rows = lambda pts: [c.Row("Player qb", "QB", "KC", pts)]  # noqa: E731
+        data = self._data(("A", rows(14)), ("B", rows(16)), ("C", rows(30)), ("D", rows(15)))
+        qb = player("qb", "QB", 20)
+        qb.ppr_projection = 17  # 6-pt pass TD league: platform is 3 above plain PPR
+        c.apply_player(qb, data, "Sleeper")
+        self.assertEqual(qb.sources, {"A": 17, "B": 19, "C": 33, "D": 18})
+        self.assertEqual(qb.projection, 19.0)  # 17,18,19,20,33 -> drop 17 and 33
+        self.assertEqual(qb.platform_projection, 20)
+        self.assertEqual(qb.source_range, (17, 33))
+
+    def test_espn_league_compares_with_espn_ppr_and_trusts_a_zero(self):
+        from ffman import consensus as c
+        data = self._data(("ESPN", [c.Row("Player qb", "QB", "KC", 18)]),
+                          ("B", [c.Row("Player qb", "QB", "KC", 21)]))
+        hurt = player("qb", "QB", 0, "Questionable")
+        c.apply_player(hurt, data, "ESPN")
+        self.assertEqual(hurt.projection, 0)  # platform says 0 (injury): keep it
+        self.assertEqual(hurt.sources, {"B": 21})  # ESPN isn't counted twice in ESPN leagues
+        report = analyze(team(["QB"], [hurt], ["qb"]))
+        self.assertIn("other sources average 21.0", report.alerts[0].text)
+
+    def test_big_disagreement_is_flagged(self):
+        from ffman import consensus as c
+        data = self._data(("A", [c.Row("Player wr", "WR", "KC", 4)]),
+                          ("B", [c.Row("Player wr", "WR", "KC", 19)]))
+        wr = player("wr", "WR", 12)
+        c.apply_player(wr, data, "Sleeper")
+        report = analyze(team(["WR"], [wr], ["wr"]))
+        self.assertTrue(any("Projections disagree" in a.text for a in report.alerts))
+
+    def test_cache_and_failed_sources(self):
+        import tempfile
+        from unittest import mock
+        from ffman import consensus as c
+        from ffman.http import FetchError
+        calls = []
+
+        def good(season, week):
+            calls.append("good")
+            return [c.Row("Player a", "WR", "KC", 10)]
+
+        def bad(season, week):
+            calls.append("bad")
+            raise FetchError("GET x failed: HTTP 403")
+
+        sources = {"good": ("Good", good), "bad": ("Bad", bad)}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict("os.environ", {"FFMAN_CACHE_DIR": tmp}), \
+                mock.patch.object(c, "SOURCES", sources):
+            first = c.load(2026, 5, {}, now=1000.0)
+            self.assertEqual(list(first.tables), ["Good"])
+            self.assertEqual(first.skipped, {"Bad": "HTTP 403"})
+            c.load(2026, 5, {}, now=1000.0 + 3600)  # an hour later: nothing refetched
+            self.assertEqual(calls, ["good", "bad"])
+            c.load(2026, 5, {}, now=1000.0 + 13 * 3600)  # after refresh_hours: both again
+            self.assertEqual(calls, ["good", "bad", "good", "bad"])
+            off = c.load(2026, 5, {"sources": "none"}, now=1000.0)
+            self.assertEqual(off.tables, {})
+
+
 if __name__ == "__main__":
     unittest.main()

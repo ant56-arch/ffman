@@ -9,7 +9,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-from . import notify, schedule, updates, web
+from . import consensus, notify, schedule, updates, web
 from .http import FetchError
 from .providers import espn, sleeper
 from .report import analyze, render
@@ -90,7 +90,7 @@ def cmd_init(args) -> None:
 
 
 def build_reports(config: dict, args, week: int | None):
-    """Fetch every league and analyze it. Returns (reports, week shown, errors)."""
+    """Fetch every league and analyze it. Returns (reports, week shown, errors, sources note)."""
     settings = config.get("settings", {})
     season, current_week = current_season_and_week()
     season = args.season or settings.get("season") or season
@@ -103,14 +103,20 @@ def build_reports(config: dict, args, week: int | None):
         schedule.apply(teams, games, dt.datetime.now(dt.timezone.utc))
         if problem:
             errors.append(problem)
+    note = None
+    if teams and shown_week and consensus._wanted(config.get("projections", {})):
+        # Average in the free projection sites (cached; a failing site is just skipped).
+        data = consensus.load(season, shown_week, config.get("projections", {}))
+        consensus.apply(teams, data)
+        note = consensus.describe(data)
     reports = [analyze(t, float(settings.get("min_gain", 0.5))) for t in teams]
-    return reports, shown_week, errors
+    return reports, shown_week, errors, note
 
 
 def cmd_run(args) -> int:
     config = load_config(args.config)
-    reports, shown_week, errors = build_reports(config, args, args.week)
-    text = render(reports, shown_week)
+    reports, shown_week, errors, note = build_reports(config, args, args.week)
+    text = render(reports, shown_week, note)
     if errors:
         text += "\n## Problems\n" + "\n".join(f"- {e}" for e in errors) + "\n"
 
@@ -126,7 +132,8 @@ def cmd_run(args) -> int:
             if repo := os.environ.get("GITHUB_REPOSITORY"):
                 run_url = f"https://github.com/{repo}/actions/workflows/site.yml"
         page = web.full_page(web.render_dashboard(reports, shown_week, errors, logout=bool(password),
-                                                  next_updates=next_updates, run_url=run_url))
+                                                  next_updates=next_updates, run_url=run_url,
+                                                  sources_note=note))
         if user and password:
             from .lock import login_page
             page = login_page(page, user, password)
