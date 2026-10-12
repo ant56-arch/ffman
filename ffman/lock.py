@@ -39,18 +39,24 @@ def encrypt(html_text: str, username: str, password: str) -> dict:
 
 LOGIN_STYLE = """
 <style>
-.login { max-width: 360px; margin: 12vh auto 0; padding-inline: 16px; display: grid; gap: 18px; }
-.login form { background: var(--surface); border: 1px solid var(--line); border-top: 4px solid var(--turf);
-  border-radius: 12px; padding: 20px; display: grid; gap: 12px; }
-.login label { display: grid; gap: 4px; font-size: 13px; font-weight: 600; color: var(--muted); }
-.login input[type=text], .login input[type=password] { font: inherit; font-size: 16px; padding: 9px 11px;
-  border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); }
-.login .row { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--ink);
-  font-weight: 400; }
-.login button { font: inherit; font-weight: 700; padding: 10px; border-radius: 8px; cursor: pointer;
-  border: 0; background: var(--turf); color: var(--surface); }
+.login { max-width: 380px; margin: 14vh auto 0; padding-inline: 16px; display: grid; gap: 20px; }
+.login h1 { font-size: clamp(40px, 11vw, 64px); line-height: .9; margin: 0; letter-spacing: -.02em; }
+.login h1 span { color: var(--turf); -webkit-text-fill-color: var(--turf); }
+.login form { background: var(--surface); border: 1px solid var(--line); border-top: 2px solid var(--turf);
+  padding: 22px; display: grid; gap: 14px; }
+.login label { display: grid; gap: 6px; font: 500 11px/1.2 var(--mono);
+  letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.login input[type=text], .login input[type=password] { font: inherit; font-size: 16px; letter-spacing: 0;
+  text-transform: none; padding: 11px 12px; border-radius: 0; border: 1px solid var(--line);
+  background: var(--bg); color: var(--ink); }
+.login input:focus { outline: 1px solid var(--turf); border-color: var(--turf); }
+.login .row { display: flex; align-items: center; gap: 8px; color: var(--ink); }
+.login .row input { accent-color: var(--turf); }
+.login button { font: 600 15px/1 var(--display); padding: 13px; border-radius: 999px; cursor: pointer;
+  border: 0; background: var(--turf); color: #050607; }
 .login button:disabled { opacity: .6; cursor: wait; }
 .login .err { color: var(--bad); font-size: 14px; margin: 0; min-height: 1.2em; }
+.login .note { color: var(--muted); font-size: 13px; margin: 0; }
 </style>
 """
 

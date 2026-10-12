@@ -79,15 +79,16 @@ ffman --notify           # also send a summary to your phone or Discord
 
 ## The website
 
-ffman also has a dashboard page with three tabs:
+ffman also has a dashboard page: a dark, orange-accented design with three tabs in the top bar:
 
-- **This week:** a to-do list of lineup moves grouped by deadline, then waiver ideas and
-  players to keep an eye on.
+- **This week:** a headline summary (points on the table, moves, first deadline) with a
+  before/after bar per league, then a to-do list of lineup moves grouped by deadline, waiver
+  ideas and players to keep an eye on.
 - **Recap:** for the last finished week, what your lineup scored vs. what ffman's lineup would
   have scored vs. the best possible lineup in hindsight. It shows whether ffman's lineup would
   have changed your result and which swaps made the difference, plus a week-by-week season
   table. ffman's lineup is rebuilt from each week's final pre-game projections.
-- **Leagues:** each league's full best lineup, folded away until you open it. New starters
+- **Leagues:** pick a league from the list to see its full best lineup. New starters
   show who they replace, and each player shows the range across projection sources (tap for
   every source's number).
 
