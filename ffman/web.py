@@ -92,6 +92,10 @@ h1 { font: 700 clamp(34px, 7vw, 48px)/1 var(--display); margin: 0; letter-spacin
 .row .meta { color: var(--muted); font-size: 14px; }
 .row .pts { font-weight: 700; color: var(--turf); white-space: nowrap; text-align: right; }
 .row .pts small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; }
+.row.move { grid-template-columns: auto 1fr auto; }
+.row.move input { width: 20px; height: 20px; accent-color: var(--turf); margin: 0; cursor: pointer; }
+.row.move.ticked .main, .row.move.ticked .pts { opacity: .45; }
+.row.move.ticked .main b { text-decoration: line-through; }
 .row.attn { box-shadow: inset 3px 0 0 var(--bad); }
 .row.watch { box-shadow: inset 3px 0 0 var(--warn); }
 .empty { color: var(--muted); margin: 0; }
@@ -137,6 +141,12 @@ details.lg[open] > summary { border-bottom: 1px solid var(--line); }
 .lineup td.slot { color: var(--muted); font-size: 13px; font-weight: 700; width: 64px; }
 .lineup td.num { text-align: right; white-space: nowrap; }
 .lineup tr.new td { background: var(--turf-soft); }
+.lineup .was { color: var(--muted); font-size: 13px; }
+details.src { display: inline; font-size: 13px; color: var(--muted); }
+details.src summary { display: inline; cursor: pointer; color: var(--turf); list-style: none; }
+details.src summary::-webkit-details-marker { display: none; }
+details.src .vals { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 2px; }
+details.src .vals span i { font-style: normal; color: var(--ink); margin-left: 4px; }
 .lineup .meta { display: block; color: var(--muted); font-size: 13px; }
 .tag { font-size: 12px; font-weight: 700; padding: 0 6px; border-radius: 4px; margin-left: 6px; }
 .tag.bad { background: var(--bad-soft); color: var(--bad); }
@@ -173,6 +183,19 @@ TAB_SCRIPT = """
     t.addEventListener('click', function () {
       show(t.dataset.tab);
       try { history.replaceState(null, '', '#' + t.dataset.tab); } catch (e) {}
+    });
+  });
+  var key = 'ffman-done-' + (document.body.dataset.week || '');
+  var done = {};
+  try { done = JSON.parse(localStorage.getItem(key) || '{}'); } catch (e) {}
+  document.querySelectorAll('input[data-done]').forEach(function (box) {
+    var row = box.closest('.row');
+    box.checked = !!done[box.dataset.done];
+    row.classList.toggle('ticked', box.checked);
+    box.addEventListener('change', function () {
+      row.classList.toggle('ticked', box.checked);
+      if (box.checked) done[box.dataset.done] = 1; else delete done[box.dataset.done];
+      try { localStorage.setItem(key, JSON.stringify(done)); } catch (e) {}
     });
   });
   var start = (location.hash || '').slice(1);
@@ -251,8 +274,11 @@ def _this_week(reports: list[LeagueReport]) -> str:
         meta = [f"{p.position}", _game(p), _why_out(b, p)]
         if m.close_call:
             meta.append("close call")
+        done_id = f"{r.team.league_name}|{p.id}|{b.id if b else ''}"
         out.append(
-            f'<li class="row"><div class="main"><div class="league">{_e(r.team.league_name)}</div>'
+            f'<li class="row move"><input type="checkbox" data-done="{_e(done_id)}" '
+            f'aria-label="Mark done: start {_e(p.name)}">'
+            f'<div class="main"><div class="league">{_e(r.team.league_name)}</div>'
             f'Start <b>{_e(p.name)}</b>{" for " + _e(b.name) if b else ""}'
             f'<div class="meta">{_e(" · ".join(x for x in meta if x))}</div></div>'
             f'<div class="pts">+{m.gain:.1f}</div></li>')
@@ -377,7 +403,7 @@ def _league(r: LeagueReport) -> str:
              if r.needs_changes else '<span class="state">Set</span>')
     proj = (f"{t.current.total:.1f} → {r.best.total:.1f} projected" if r.needs_changes
             else f"{t.current.total:.1f} projected")
-    new_ids = {m.player.id for m in r.start}
+    replaces = {m.player.id: m.benched for m in r.start}
     rows = []
     for slot, p in zip(r.best.slots, r.best.players):
         label = SLOT_LABEL.get(slot, slot)
@@ -386,17 +412,35 @@ def _league(r: LeagueReport) -> str:
             continue
         lock = '<span class="tag lock">LOCKED</span>' if p.locked else ""
         game = _game(p)
-        cls = ' class="new"' if p.id in new_ids else ""
+        cls = ' class="new"' if p.id in replaces else ""
+        was = ""
+        if p.id in replaces:
+            b = replaces[p.id]
+            was = f'<span class="was">In for {_e(b.name) if b else "an empty slot"}</span>'
+        src = _sources(p)
         rows.append(
             f'<tr{cls}><td class="slot">{_e(label)}</td>'
             f'<td>{_e(p.name)}{_status_tag(p)}{lock}'
             f'<span class="meta">{_e(p.position)}{", " + _e(p.team) if p.team else ""}'
-            f'{" · " + _e(game) if game else ""}</span></td>'
+            f'{" · " + _e(game) if game else ""}</span>{was}{src}</td>'
             f'<td class="num">{p.effective_projection:.1f}</td></tr>')
     note = f'<div class="lgnote">{_e(t.waiver_note)}</div>' if t.waiver_note else ""
     return (f'<details class="lg"><summary><span class="name">{_e(t.league_name)}</span>{state}'
             f'<span class="meta">{_e(t.platform)} · {_e(t.team_name)} · {_e(proj)}</span></summary>'
             f'<table class="lineup">{"".join(rows)}</table>{note}</details>')
+
+
+def _sources(p: Player) -> str:
+    """Spread of the projection sources behind a player's number, values on tap."""
+    rng = p.source_range
+    if not rng:
+        return ""
+    vals = dict(p.sources)
+    if p.platform_projection is not None:
+        vals["Platform"] = p.platform_projection
+    items = "".join(f"<span>{_e(k)}<i>{v:.1f}</i></span>" for k, v in sorted(vals.items(), key=lambda kv: -kv[1]))
+    return (f'<details class="src"><summary>{len(vals)} projections: {rng[0]:.1f}–{rng[1]:.1f}</summary>'
+            f'<div class="vals">{items}</div></details>')
 
 
 # --------------------------------------------------------------------------- Page
@@ -429,7 +473,8 @@ def _stale(next_updates: list[dt.datetime], run_url: str | None) -> str:
 def render_dashboard(reports: list[LeagueReport], week: int | None, errors: list[str],
                      generated: dt.datetime | None = None, week_picker: bool = False,
                      logout: bool = False, next_updates: list[dt.datetime] | None = None,
-                     run_url: str | None = None, recap: SeasonRecap | None = None) -> str:
+                     run_url: str | None = None, recap: SeasonRecap | None = None,
+                     sources_note: str | None = None) -> str:
     """The page body: <title>, styles and content (no <html>/<body> wrapper)."""
     generated = generated or dt.datetime.now().astimezone()
     next_updates = next_updates or []
@@ -465,21 +510,23 @@ def render_dashboard(reports: list[LeagueReport], week: int | None, errors: list
     out.append('<section id="leagues" class="group" role="tabpanel">'
                + ("".join(_league(r) for r in ordered) or '<p class="empty">No leagues found. Check your config.</p>')
                + "</section>")
-    out.append('<footer>Suggestions only: nothing is ever changed in your leagues. Projections from '
-               'Sleeper (scored with each league\'s settings) and ESPN; game times from ESPN, shown in '
-               f'{_e(generated.strftime("%Z") or "local time")}. Check injury news before kickoff.</footer>')
-    out.append("</main>" + TAB_SCRIPT)
+    sources = (_e(sources_note) if sources_note else
+               "Projections from Sleeper (scored with each league's settings) and ESPN.")
+    out.append(f'<footer>Suggestions only: nothing is ever changed in your leagues. {sources} '
+               f'Game times from ESPN, shown in {_e(generated.strftime("%Z") or "local time")}. '
+               'Check injury news before kickoff.</footer>')
+    out.append(f'</main><script>document.body.dataset.week="{week or ""}";</script>' + TAB_SCRIPT)
     return "\n".join(out)
 
 
-def full_page(body: str) -> str:
+def full_page(body: str, week: int | None = None) -> str:
     return ('<!doctype html><html lang="en"><head><meta charset="utf-8">'
             '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
             f"</head><body>{body}</body></html>")
 
 
 def serve(build, host: str = "127.0.0.1", port: int = 8000, cache_seconds: int = 300) -> None:
-    """Run the local website. `build(week)` returns (reports, week, errors, recap)."""
+    """Run the local website. `build(week)` returns (reports, week, errors, recap, sources note)."""
     cache: dict = {}
 
     class Handler(BaseHTTPRequestHandler):
@@ -492,8 +539,9 @@ def serve(build, host: str = "127.0.0.1", port: int = 8000, cache_seconds: int =
             week = int(query["week"][0]) if query.get("week", [""])[0].isdigit() else None
             hit = cache.get(week)
             if not hit or time.time() - hit[0] > cache_seconds:
-                reports, shown, errors, recap = build(week)
-                page = full_page(render_dashboard(reports, shown, errors, week_picker=True, recap=recap))
+                reports, shown, errors, recap, note = build(week)
+                page = full_page(render_dashboard(reports, shown, errors, week_picker=True, recap=recap,
+                                                  sources_note=note), shown)
                 hit = cache[week] = (time.time(), page.encode())
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")

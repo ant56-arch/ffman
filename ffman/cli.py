@@ -9,7 +9,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-from . import notify, schedule, updates, web
+from . import consensus, notify, schedule, updates, web
 from .http import FetchError
 from .providers import espn, sleeper
 from .recap import SeasonRecap
@@ -91,7 +91,7 @@ def cmd_init(args) -> None:
 
 
 def build_reports(config: dict, args, week: int | None):
-    """Fetch every league and analyze it. Returns (reports, week shown, errors)."""
+    """Fetch every league and analyze it. Returns (reports, week shown, errors, sources note)."""
     settings = config.get("settings", {})
     season, current_week = current_season_and_week()
     season = args.season or settings.get("season") or season
@@ -104,8 +104,14 @@ def build_reports(config: dict, args, week: int | None):
         schedule.apply(teams, games, dt.datetime.now(dt.timezone.utc))
         if problem:
             errors.append(problem)
+    note = None
+    if teams and shown_week and consensus._wanted(config.get("projections", {})):
+        # Average in the free projection sites (cached; a failing site is just skipped).
+        data = consensus.load(season, shown_week, config.get("projections", {}))
+        consensus.apply(teams, data)
+        note = consensus.describe(data)
     reports = [analyze(t, float(settings.get("min_gain", 0.5))) for t in teams]
-    return reports, shown_week, errors
+    return reports, shown_week, errors, note
 
 
 def build_recap(config: dict, season: int, current_week: int | None, only: str | None = None):
@@ -131,11 +137,11 @@ def build_recap(config: dict, season: int, current_week: int | None, only: str |
 
 def cmd_run(args) -> int:
     config = load_config(args.config)
-    reports, shown_week, errors = build_reports(config, args, args.week)
+    reports, shown_week, errors, note = build_reports(config, args, args.week)
     season = args.season or config.get("settings", {}).get("season") or current_season_and_week()[0]
     recap, recap_errors = build_recap(config, season, shown_week, args.league)
     errors += recap_errors
-    text = render(reports, shown_week)
+    text = render(reports, shown_week, note)
     if errors:
         text += "\n## Problems\n" + "\n".join(f"- {e}" for e in errors) + "\n"
 
@@ -152,7 +158,7 @@ def cmd_run(args) -> int:
                 run_url = f"https://github.com/{repo}/actions/workflows/site.yml"
         page = web.full_page(web.render_dashboard(reports, shown_week, errors, logout=bool(password),
                                                   next_updates=next_updates, run_url=run_url,
-                                                  recap=recap))
+                                                  sources_note=note, recap=recap), shown_week)
         if user and password:
             from .lock import login_page
             page = login_page(page, user, password)
@@ -176,16 +182,18 @@ def cmd_run(args) -> int:
               f"{sum(len(r.waivers) for r in reports)} waiver ideas"
               f"{f' ({no_waivers} leagues without waiver data)' if no_waivers else ''}, "
               f"{len(recap.weeks)} recap league-weeks, {len(errors)} problems.", file=sys.stderr)
+        if note:  # source names and failure reasons only, safe for public logs
+            print(note, file=sys.stderr)
     return 1 if errors and not reports else 0
 
 
 def cmd_serve(args) -> int:
     config = load_config(args.config)
     def build(week):
-        reports, shown, errors = build_reports(config, args, week or args.week)
+        reports, shown, errors, note = build_reports(config, args, week or args.week)
         season = args.season or config.get("settings", {}).get("season") or current_season_and_week()[0]
         recap, recap_errors = build_recap(config, season, shown, args.league)
-        return reports, shown, errors + recap_errors, recap
+        return reports, shown, errors + recap_errors, recap, note
 
     web.serve(build,
               host=args.host, port=args.port)
