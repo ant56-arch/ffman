@@ -25,15 +25,18 @@ def load_players() -> dict:
     return get_json_cached("sleeper_players.json", f"{BASE}/players/nfl", max_age_hours=24)
 
 
-def load_projections(season: int, week: int) -> tuple[dict[str, dict], dict[str, str | None], set[str]]:
+def load_projections(season: int, week: int,
+                     cache_hours: float | None = None) -> tuple[dict[str, dict], dict[str, str | None], set[str]]:
     """Return ({player_id: projected stats}, {player_id: live injury status}, teams playing).
 
     The api.sleeper.com endpoint has full stat lines plus up-to-the-minute
     injury designations; the older v1 endpoint is only a fallback.
     """
+    url = f"https://api.sleeper.com/projections/nfl/{season}/{week}"
+    params = {"season_type": "regular", "position[]": PROJECTION_POSITIONS}
     try:
-        rows = get_json(f"https://api.sleeper.com/projections/nfl/{season}/{week}",
-                        params={"season_type": "regular", "position[]": PROJECTION_POSITIONS})
+        rows = (get_json_cached(f"sleeper_proj_{season}_{week}.json", url, cache_hours, params=params)
+                if cache_hours else get_json(url, params=params))
     except FetchError:
         rows = None
     if isinstance(rows, list) and rows:
@@ -211,3 +214,60 @@ def _waiver_note(settings: dict, roster_settings: dict) -> str | None:
     if roster_settings.get("waiver_position"):
         return f"Waiver priority #{roster_settings['waiver_position']}"
     return None
+
+
+def _my_leagues(config: dict, season: int) -> tuple[str, list[str]]:
+    username = config.get("username")
+    if not username:
+        raise FetchError("Sleeper config needs your username to find your teams")
+    user = get_json(f"{BASE}/user/{username}")
+    if not user:
+        raise FetchError(f"Sleeper user '{username}' not found")
+    league_ids = [str(x) for x in config.get("league_ids", [])]
+    if not league_ids:
+        leagues = get_json(f"{BASE}/user/{user['user_id']}/leagues/nfl/{season}") or []
+        league_ids = [lg["league_id"] for lg in leagues]
+    return user["user_id"], league_ids
+
+
+def fetch_recaps(config: dict, season: int, weeks: list[int]):
+    """WeekRecap for each finished week in every league."""
+    from ..recap import summarize
+
+    if not weeks:
+        return []
+    user_id, league_ids = _my_leagues(config, season)
+    players = load_players()
+    # Finished weeks' projections never change: cache them for a week.
+    projections = {w: load_projections(season, w, cache_hours=24 * 7)[0] for w in weeks}
+    recaps = []
+    for league_id in league_ids:
+        league = get_json(f"{BASE}/league/{league_id}")
+        rosters = get_json(f"{BASE}/league/{league_id}/rosters") or []
+        mine = next((r for r in rosters
+                     if r.get("owner_id") == user_id or user_id in (r.get("co_owners") or [])), None)
+        if mine is None:
+            continue
+        scoring = league.get("scoring_settings") or {}
+        slots = [SLOT_ALIASES.get(s, s) for s in league.get("roster_positions", []) if s not in NON_STARTING]
+        for week in weeks:
+            matchups = get_json(f"{BASE}/league/{league_id}/matchups/{week}") or []
+            me = next((m for m in matchups if m.get("roster_id") == mine.get("roster_id")), None)
+            if not me or not me.get("starters"):
+                continue
+            opp = next((m for m in matchups if me.get("matchup_id") is not None
+                        and m.get("matchup_id") == me.get("matchup_id")
+                        and m.get("roster_id") != me.get("roster_id")), None)
+            points = me.get("players_points") or {}
+            by_id = {}
+            for pid in me.get("players") or []:
+                p = _player(pid, players, projections[week], {}, set(), scoring)
+                p.actual = float(points.get(pid) or 0)
+                by_id[pid] = p
+            starters = list(me["starters"]) + ["0"] * (len(slots) - len(me["starters"]))
+            team = Team(platform="Sleeper", league_name=league.get("name", league_id),
+                        team_name="", week=week, slots=slots, roster=list(by_id.values()),
+                        current=Lineup(slots, [by_id.get(pid) for pid in starters[: len(slots)]]))
+            recaps.append(summarize(team, week, opponent=opp.get("points") if opp else None,
+                                    actual_total=me.get("points")))
+    return recaps

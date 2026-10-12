@@ -60,6 +60,7 @@ class Player:
     owned_pct: float | None = None     # % of leagues where the player is rostered
     trending: int | None = None        # adds in the last 24 hours (Sleeper)
     waiver_status: str | None = None   # "Free agent" / "On waivers", when known
+    actual: float | None = None        # real points scored (finished weeks, for recaps)
 
     @property
     def is_out(self) -> bool:

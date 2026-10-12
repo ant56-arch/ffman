@@ -65,9 +65,10 @@ def fetch_league(config: dict, season: int, week: int | None,
         raise
 
 
-def _projection(player: dict, week: int) -> float:
+def _projection(player: dict, week: int, source: int = 1) -> float:
+    """League-scored points for the week: source 1 = projected, 0 = actual."""
     for stat in player.get("stats") or []:
-        if stat.get("statSourceId") == 1 and stat.get("scoringPeriodId") == week:
+        if stat.get("statSourceId") == source and stat.get("scoringPeriodId") == week:
             return round(float(stat.get("appliedTotal") or 0), 2)
     return 0.0
 
@@ -188,3 +189,35 @@ def fetch_team(config: dict, season: int, week: int | None) -> Team:
         team.free_agents = []
         team.waiver_note = "Waiver suggestions unavailable: ESPN didn't return the free-agent list."
     return team
+
+
+def fetch_recaps(config: dict, season: int, weeks: list[int]):
+    """WeekRecap for each finished week: your lineup that week vs. ffman's vs. hindsight."""
+    from ..recap import summarize
+
+    recaps = []
+    for week in weeks:
+        data = fetch_league(config, season, week,
+                            views=("mTeam", "mRoster", "mSettings", "mMatchupScore"))
+        team = build_team(data, config, week)
+        my_id = _find_my_team(data, config).get("id")
+        entries = {str((e.get("playerPoolEntry") or {}).get("player", {}).get("id")): e
+                   for e in (_find_my_team(data, config).get("roster") or {}).get("entries") or []}
+        for p in team.roster:
+            info = ((entries.get(p.id) or {}).get("playerPoolEntry") or {}).get("player") or {}
+            p.actual = _projection(info, week, source=0)
+        mine = opp = None
+        for m in data.get("schedule") or []:
+            if m.get("matchupPeriodId") != week:
+                continue
+            home, away = m.get("home") or {}, m.get("away") or {}
+            if home.get("teamId") == my_id:
+                mine, opp = home, away
+            elif away.get("teamId") == my_id:
+                mine, opp = away, home
+        recaps.append(summarize(
+            team, week,
+            opponent=opp.get("totalPoints") if opp else None,
+            actual_total=mine.get("totalPoints") if mine and mine.get("totalPoints") is not None else None,
+        ))
+    return recaps

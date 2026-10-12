@@ -12,6 +12,7 @@ from pathlib import Path
 from . import notify, schedule, updates, web
 from .http import FetchError
 from .providers import espn, sleeper
+from .recap import SeasonRecap
 from .report import analyze, render
 
 EXAMPLE_CONFIG = Path(__file__).with_name("config.example.toml")
@@ -107,9 +108,33 @@ def build_reports(config: dict, args, week: int | None):
     return reports, shown_week, errors
 
 
+def build_recap(config: dict, season: int, current_week: int | None, only: str | None = None):
+    """SeasonRecap of every finished week (weeks before the current one)."""
+    weeks = list(range(1, min(current_week or 1, 19)))
+    recaps, errors = [], []
+    if not weeks:
+        return SeasonRecap([]), errors
+    if config.get("sleeper"):
+        try:
+            recaps += sleeper.fetch_recaps(config["sleeper"], season, weeks)
+        except FetchError as exc:
+            errors.append(f"Recap (Sleeper): {exc}")
+    for league in config.get("espn", []):
+        try:
+            recaps += espn.fetch_recaps(league, season, weeks)
+        except (FetchError, KeyError, TypeError, ValueError) as exc:
+            errors.append(f"Recap (ESPN {league.get('name') or league.get('league_id')}): {exc}")
+    if only:
+        recaps = [r for r in recaps if only.lower() in r.league_name.lower()]
+    return SeasonRecap(recaps), errors
+
+
 def cmd_run(args) -> int:
     config = load_config(args.config)
     reports, shown_week, errors = build_reports(config, args, args.week)
+    season = args.season or config.get("settings", {}).get("season") or current_season_and_week()[0]
+    recap, recap_errors = build_recap(config, season, shown_week, args.league)
+    errors += recap_errors
     text = render(reports, shown_week)
     if errors:
         text += "\n## Problems\n" + "\n".join(f"- {e}" for e in errors) + "\n"
@@ -126,7 +151,8 @@ def cmd_run(args) -> int:
             if repo := os.environ.get("GITHUB_REPOSITORY"):
                 run_url = f"https://github.com/{repo}/actions/workflows/site.yml"
         page = web.full_page(web.render_dashboard(reports, shown_week, errors, logout=bool(password),
-                                                  next_updates=next_updates, run_url=run_url))
+                                                  next_updates=next_updates, run_url=run_url,
+                                                  recap=recap))
         if user and password:
             from .lock import login_page
             page = login_page(page, user, password)
@@ -149,13 +175,19 @@ def cmd_run(args) -> int:
         print(f"{len(reports)} leagues checked, {sum(r.needs_changes for r in reports)} need changes, "
               f"{sum(len(r.waivers) for r in reports)} waiver ideas"
               f"{f' ({no_waivers} leagues without waiver data)' if no_waivers else ''}, "
-              f"{len(errors)} problems.", file=sys.stderr)
+              f"{len(recap.weeks)} recap league-weeks, {len(errors)} problems.", file=sys.stderr)
     return 1 if errors and not reports else 0
 
 
 def cmd_serve(args) -> int:
     config = load_config(args.config)
-    web.serve(lambda week: build_reports(config, args, week or args.week),
+    def build(week):
+        reports, shown, errors = build_reports(config, args, week or args.week)
+        season = args.season or config.get("settings", {}).get("season") or current_season_and_week()[0]
+        recap, recap_errors = build_recap(config, season, shown, args.league)
+        return reports, shown, errors + recap_errors, recap
+
+    web.serve(build,
               host=args.host, port=args.port)
     return 0
 

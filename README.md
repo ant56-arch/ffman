@@ -76,9 +76,15 @@ ffman --notify           # also send a summary to your phone or Discord
 
 ## The website
 
-ffman also has a dashboard page. It shows every league as a card, with leagues that need
-moves listed first. Each card shows START/SIT pairs and the points each move gains, flags for
-bye weeks and injuries, and the full best lineup.
+ffman also has a dashboard page with three tabs:
+
+- **This week:** a to-do list of lineup moves grouped by deadline, then waiver ideas and
+  players to keep an eye on.
+- **Recap:** for the last finished week, what your lineup scored vs. what ffman's lineup would
+  have scored vs. the best possible lineup in hindsight. It shows whether ffman's lineup would
+  have changed your result and which swaps made the difference, plus a week-by-week season
+  table. ffman's lineup is rebuilt from each week's final pre-game projections.
+- **Leagues:** each league's full best lineup, folded away until you open it.
 
 ```bash
 ffman serve                    # open http://127.0.0.1:8000
