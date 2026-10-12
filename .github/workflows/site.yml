@@ -58,12 +58,6 @@ jobs:
           if [ -z "$FFMAN_CONFIG" ]; then
             echo "::error::Add an FFMAN_CONFIG repository secret with your config.toml contents (see README)."; exit 1
           fi
-      - name: Reuse cached projections for finished weeks
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ffman
-          key: ffman-cache-${{ github.run_id }}
-          restore-keys: ffman-cache-
       - run: pip install cryptography
       # Projection-site data (public numbers only, no rosters) carries over between runs, so
       # the sites are read about twice a day instead of on every 30-minute Sunday update.
