@@ -137,8 +137,15 @@ class UpdateScheduleTests(unittest.TestCase):
     def test_next_runs_from_workflow_crons(self):
         import datetime as dt
         from ffman import updates
-        crons = updates.read_crons()  # the real workflow file
-        self.assertIn("7 13 * * *", crons)
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as d:
+            wf = Path(d, "site.yml")
+            wf.write_text('on:\n  schedule:\n    - cron: "7 13 * * *"   # morning\n'
+                          '    - cron: "7 1 * * 3"\n    - cron: "7,37 20-23 * * 1"\n'
+                          '    # - cron: "0 5 * * *"\n')
+            crons = updates.read_crons(wf)
+        self.assertEqual(crons, ["7 13 * * *", "7 1 * * 3", "7,37 20-23 * * 1"])
         mon = dt.datetime(2026, 10, 5, 21, 10, tzinfo=dt.timezone.utc)  # Monday 5:10pm ET
         runs = updates.next_runs(crons, mon, count=3)
         self.assertEqual([r.strftime("%a %H:%M") for r in runs], ["Mon 21:37", "Mon 22:07", "Mon 22:37"])
